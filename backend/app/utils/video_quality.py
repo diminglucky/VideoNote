@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ def screenshot_video_format_selector() -> str:
 
 
 def probe_video_size(video_path: str | Path) -> Optional[Tuple[int, int]]:
+    ffprobe_error = None
     try:
         result = subprocess.run(
             [
@@ -50,25 +52,44 @@ def probe_video_size(video_path: str | Path) -> Optional[Tuple[int, int]]:
             timeout=10,
         )
     except Exception as exc:
-        logger.warning("Unable to inspect video resolution: %s", exc)
-        return None
+        ffprobe_error = exc
+    else:
+        if result.returncode == 0:
+            output = (result.stdout or "").strip()
+            if "x" in output:
+                try:
+                    width, height = output.split("x", 1)
+                    return int(width), int(height)
+                except ValueError:
+                    pass
+        else:
+            ffprobe_error = RuntimeError(
+                (result.stderr or result.stdout or "ffprobe returned a non-zero exit code").strip()
+            )
 
-    if result.returncode != 0:
-        logger.warning(
-            "ffprobe failed while inspecting video: %s",
-            (result.stderr or result.stdout).strip(),
-        )
-        return None
+    if ffprobe_error is not None:
+        logger.warning("ffprobe failed while inspecting video: %s", ffprobe_error)
 
-    output = (result.stdout or "").strip()
-    if "x" not in output:
-        return None
-
+    # Some lightweight Windows installs provide ffmpeg but not a working
+    # ffprobe.  ffmpeg still prints the stream dimensions while opening the
+    # input, so use that diagnostic output as a safe fallback.
     try:
-        width, height = output.split("x", 1)
-        return int(width), int(height)
-    except ValueError:
+        fallback = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(video_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Unable to inspect video with ffmpeg fallback: %s", exc)
         return None
+
+    stream_text = f"{fallback.stderr or ''}\n{fallback.stdout or ''}"
+    match = re.search(r"\b(\d{2,5})x(\d{2,5})(?:[,\s]|$)", stream_text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 def is_screenshot_ready_video(video_path: str | Path, *, trust_unknown: bool = False) -> bool:

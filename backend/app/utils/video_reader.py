@@ -18,6 +18,37 @@ _RUN_LOCKS: dict[str, threading.Lock] = {}
 _RUN_LOCKS_GUARD = threading.Lock()
 
 
+def _probe_video_duration(video_path: str) -> float | None:
+    """Return video duration, falling back to ffmpeg when ffprobe is unavailable."""
+    try:
+        return float(ffmpeg.probe(video_path)["format"]["duration"])
+    except Exception as exc:
+        logger.warning("ffprobe failed while reading video duration: %s", exc)
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", str(video_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Unable to read video duration with ffmpeg fallback: %s", exc)
+        return None
+
+    output = f"{result.stderr or ''}\n{result.stdout or ''}"
+    match = re.search(
+        r"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?),",
+        output,
+    )
+    if not match:
+        return None
+
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
 @dataclass
 class VideoGridImage:
     url: str
@@ -330,7 +361,9 @@ class VideoReader:
 
         try:
             os.makedirs(self.frame_dir, exist_ok=True)
-            duration = float(ffmpeg.probe(self.video_path)["format"]["duration"])
+            duration = _probe_video_duration(self.video_path)
+            if duration is None:
+                raise ValueError("Unable to determine video duration")
             timestamps = self._candidate_timestamps(duration, max_frames)
             if not timestamps:
                 return []
