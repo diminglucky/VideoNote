@@ -49,6 +49,7 @@ from app.agents.executor import AgentRuntimeContext, PlanExecutor
 from app.agents.planner import build_note_execution_plan
 from app.enmus.task_status_enums import TaskStatus
 from app.services.note import NoteGenerator
+from app.services.note_runtime import NoteRuntime
 from app.utils.task_status_writer import write_status_record
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment
 from app.models.audio_model import AudioDownloadResult
@@ -1012,19 +1013,54 @@ class TestNoteAgents(unittest.TestCase):
                 captured["formats"] = request.formats
                 return "## Note\n"
 
-        with patch.object(NoteGenerator, "_init_transcriber", return_value=object()):
-            generator = NoteGenerator(generation_token="generation-1")
-        generator.transcript_agent = _TranscriptAgent()
-        generator.download_agent = _DownloadAgent()
-        generator.note_writer_agent = _NoteWriterAgent()
+        class _Lifecycle:
+            def mark_parsing(self, _task_id):
+                return None
+
+            def mark_saving(self, _task_id):
+                return None
+
+            def mark_success(self, _task_id):
+                return None
+
+            def handle_exception(self, _task_id, exc):
+                raise exc
+
+        class _ResultStore:
+            def save_metadata(self, **_kwargs):
+                return None
+
+        class _MarkdownComposerAgent:
+            def run(self, request):
+                return request.markdown
+
+        executor = PlanExecutor(
+            download_agent=_DownloadAgent(),
+            transcript_agent=_TranscriptAgent(),
+            note_writer_agent=_NoteWriterAgent(),
+            markdown_composer_agent=_MarkdownComposerAgent(),
+        )
+
+        class _RuntimeFactory:
+            def create(self, _request):
+                return NoteRuntime(
+                    transcriber=object(),
+                    downloader=object(),
+                    gpt=object(),
+                    executor=executor,
+                )
+
+        generator = NoteGenerator(
+            generation_token="generation-1",
+            lifecycle=_Lifecycle(),
+            runtime_factory=_RuntimeFactory(),
+            result_store=_ResultStore(),
+        )
 
         with ProjectTempDir() as tmp_dir:
             output_dir = pathlib.Path(tmp_dir)
             with (
                 patch("app.services.note.NOTE_OUTPUT_DIR", output_dir),
-                patch.object(generator, "_get_downloader", return_value=object()),
-                patch.object(generator, "_get_gpt", return_value=object()),
-                patch.object(generator, "_save_metadata", return_value=None),
             ):
                 note = generator.generate(
                     video_url="https://example.com/video",

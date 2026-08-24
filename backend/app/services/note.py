@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from pathlib import Path
@@ -7,35 +6,20 @@ from typing import List, Optional, Union
 from pydantic import HttpUrl
 from dotenv import load_dotenv
 
-from app.downloaders.base import Downloader
-from app.db.video_task_dao import delete_task_by_video, insert_video_task
-from app.enmus.exception import NoteErrorEnum, ProviderErrorEnum
-from app.enmus.task_status_enums import TaskStatus
 from app.enmus.note_enums import DownloadQuality
-from app.exceptions.note import NoteError
-from app.exceptions.provider import ProviderError
-from app.gpt.base import GPT
-from app.gpt.gpt_factory import GPTFactory
 from app.agents import AgentExecutionContext, build_note_execution_plan
-from app.agents.executor import AgentRuntimeContext, PlanExecutor
-from app.agents.note_agents import (
-    AgentRuntimeServices,
-    MarkdownComposerAgent,
-    DownloadAgent,
-    NoteWriterAgent,
-    TranscriptAgent,
-)
-from app.models.model_config import ModelConfig
+from app.agents.executor import AgentRuntimeContext
+from app.agents.note_agents import AgentRuntimeServices, MarkdownComposerAgent, NoteWriterAgent
 from app.models.notes_model import NoteResult
-from app.services.constant import SUPPORT_PLATFORM_MAP
-from app.services.provider import ProviderService
-from app.services.visual_screenshot_agent import (
-    VisualScreenshotAgent,
+from app.models.note_generation import GenerationRequest
+from app.services.note_result_store import NoteResultStore
+from app.services.note_runtime import (
+    IMAGE_BASE_URL,
+    IMAGE_OUTPUT_DIR,
+    NoteRuntimeFactory,
 )
-from app.transcriber.base import Transcriber
-from app.transcriber.transcriber_provider import get_transcriber, _transcribers
+from app.services.task_lifecycle import TaskLifecycleService
 from app.utils.note_helper import prepend_source_link
-from app.utils.task_status_writer import write_status_record
 from app.utils.video_helper import generate_screenshot
 from app.utils.video_reader import VideoReader
 
@@ -48,10 +32,6 @@ load_dotenv()
 # 输出目录（用于缓存音频、转写、Markdown 文件，以及存储截图）
 NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
 NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_OUTPUT_DIR = os.getenv("OUT_DIR", "./static/screenshots")
-# 图片基础 URL（用于生成 Markdown 中的图片链接，需前端静态目录对应）
-IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/static/screenshots")
-
 # 日志配置
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -63,28 +43,20 @@ class NoteGenerator:
     以及将任务信息写入状态文件与数据库等功能。
     """
 
-    def __init__(self, generation_token: Optional[str] = None):
-        from app.services.transcriber_config_manager import TranscriberConfigManager
-        config_manager = TranscriberConfigManager()
-        self.model_size: str = config_manager.get_whisper_model_size()
-        self.device: Optional[str] = None
-        self.transcriber_type: str = config_manager.get_transcriber_type()
-        self.transcriber: Transcriber = self._init_transcriber()
+    def __init__(
+        self,
+        generation_token: Optional[str] = None,
+        lifecycle: Optional[TaskLifecycleService] = None,
+        runtime_factory: Optional[NoteRuntimeFactory] = None,
+        result_store: Optional[NoteResultStore] = None,
+    ):
         self.generation_token = generation_token
-        self.video_path: Optional[Path] = None
-        self.video_img_urls=[]
-        self.execution_plan = None
-        self.agent_services = AgentRuntimeServices(
-            update_status=self._update_status,
-            handle_exception=self._handle_exception,
-            get_downloader=self._get_downloader,
-            transcribe_audio=lambda audio_file: self.transcriber.transcript(file_path=audio_file),
-            create_screenshot_agent=self._visual_screenshot_agent,
+        self.lifecycle = lifecycle or TaskLifecycleService(
+            generation_token=generation_token,
+            output_dir=NOTE_OUTPUT_DIR,
         )
-        self.download_agent = DownloadAgent(self.agent_services)
-        self.transcript_agent = TranscriptAgent(self.agent_services)
-        self.note_writer_agent = NoteWriterAgent(self.agent_services)
-        self.markdown_composer_agent = MarkdownComposerAgent(self.agent_services)
+        self.runtime_factory = runtime_factory or NoteRuntimeFactory(self.lifecycle)
+        self.result_store = result_store or NoteResultStore()
         logger.info("NoteGenerator 初始化完成")
 
     # ---------------- 公有方法 ----------------
@@ -128,94 +100,110 @@ class NoteGenerator:
         :param grid_size: 生成缩略图时的网格大小，如 [3, 3]
         :return: NoteResult 对象，包含 markdown 文本、转写结果和音频元信息
         """
-        if grid_size is None:
-            grid_size = []
-        formats = _format or []
-        format_set = set(formats)
-        wants_screenshot = screenshot or "screenshot" in format_set
-        wants_link = link or "link" in format_set
-        self.execution_plan = build_note_execution_plan(
+        request = GenerationRequest.from_generate_args(
+            video_url=str(video_url),
+            platform=platform,
+            quality=quality,
+            task_id=task_id,
+            model_name=model_name,
+            provider_id=provider_id,
+            link=link,
+            screenshot=screenshot,
+            formats=_format,
+            style=style,
+            extras=extras,
+            output_path=output_path,
+            video_understanding=video_understanding,
+            video_interval=video_interval,
+            grid_size=grid_size,
+            defer_screenshots=defer_screenshots,
+            generation_token=self.generation_token,
+        )
+        formats = list(request.formats)
+        execution_plan = build_note_execution_plan(
             AgentExecutionContext(
-                task_id=task_id,
-                video_url=str(video_url),
-                platform=platform,
-                quality=quality,
-                model_name=model_name,
-                provider_id=provider_id,
+                task_id=request.task_id,
+                video_url=request.video_url,
+                platform=request.platform,
+                quality=request.quality,
+                model_name=request.model_name,
+                provider_id=request.provider_id,
                 formats=tuple(formats),
-                screenshot=wants_screenshot,
-                link=wants_link,
+                screenshot=request.wants_screenshot,
+                link=request.wants_link,
                 has_prefetched_transcript=bool(
-                    task_id and (NOTE_OUTPUT_DIR / f"{task_id}_transcript.json").exists()
+                    request.task_id
+                    and (NOTE_OUTPUT_DIR / f"{request.task_id}_transcript.json").exists()
                 ),
-                video_understanding=video_understanding,
-                defer_screenshots=defer_screenshots,
+                video_understanding=request.video_understanding,
+                defer_screenshots=request.defer_screenshots,
                 review_mode=os.getenv("SCREENSHOT_REVIEW_MODE", "off").strip().lower(),
                 metadata={
-                    "video_interval": video_interval,
-                    "grid_size": grid_size,
-                    "style": style,
-                    "extras": extras,
+                    "video_interval": request.video_interval,
+                    "grid_size": list(request.grid_size),
+                    "style": request.style,
+                    "extras": request.extras,
                 },
             )
         )
         try:
-            logger.info(f"开始生成笔记 (task_id={task_id})")
-            self._update_status(task_id, TaskStatus.PARSING)
-            downloader = self._get_downloader(platform)
-            gpt = self._get_gpt(model_name, provider_id)
+            logger.info("开始生成笔记 (task_id=%s)", request.task_id)
+            self.lifecycle.mark_parsing(request.task_id)
+            runtime = self.runtime_factory.create(request)
             logger.info(
                 "Agent execution plan for task_id=%s: %s",
-                task_id,
-                " -> ".join(self.execution_plan.step_ids()),
+                request.task_id,
+                " -> ".join(execution_plan.step_ids()),
             )
 
             runtime_context = AgentRuntimeContext(
-                task_id=task_id,
-                video_url=str(video_url),
-                platform=platform,
-                quality=quality,
+                task_id=request.task_id,
+                video_url=request.video_url,
+                platform=request.platform,
+                quality=request.quality,
                 formats=formats,
-                wants_screenshot=wants_screenshot,
-                wants_link=wants_link,
+                wants_screenshot=request.wants_screenshot,
+                wants_link=request.wants_link,
                 note_output_dir=NOTE_OUTPUT_DIR,
-                downloader=downloader,
-                gpt=gpt,
-                output_path=output_path,
-                style=style,
-                extras=extras,
-                video_understanding=video_understanding,
-                video_interval=video_interval,
-                grid_size=grid_size,
+                downloader=runtime.downloader,
+                gpt=runtime.gpt,
+                output_path=request.output_path,
+                style=request.style,
+                extras=request.extras,
+                video_understanding=request.video_understanding,
+                video_interval=request.video_interval,
+                grid_size=list(request.grid_size),
             )
 
-            executor = PlanExecutor(
-                download_agent=self.download_agent,
-                transcript_agent=self.transcript_agent,
-                note_writer_agent=self.note_writer_agent,
-                markdown_composer_agent=self.markdown_composer_agent,
-            )
-            runtime_context = executor.run(self.execution_plan, runtime_context)
-            markdown = prepend_source_link(runtime_context.markdown or "", str(video_url))
+            runtime_context = runtime.executor.run(execution_plan, runtime_context)
+            markdown = prepend_source_link(runtime_context.markdown or "", request.video_url)
             audio_meta = runtime_context.audio_meta
             transcript = runtime_context.transcript
-            self.video_path = runtime_context.video_path
-            self.video_img_urls = runtime_context.video_img_urls
+            video_path = runtime_context.video_path
 
-            if self.video_path and not getattr(audio_meta, "video_path", None):
-                audio_meta.video_path = str(self.video_path)
+            if video_path and not getattr(audio_meta, "video_path", None):
+                audio_meta.video_path = str(video_path)
 
-            self._update_status(task_id, TaskStatus.SAVING)
-            self._save_metadata(video_id=audio_meta.video_id, platform=platform, task_id=task_id)
+            self.lifecycle.mark_saving(request.task_id)
+            self.result_store.save_metadata(
+                video_id=audio_meta.video_id,
+                platform=request.platform,
+                task_id=request.task_id,
+            )
 
-            if not defer_screenshots:
-                self._update_status(task_id, TaskStatus.SUCCESS)
-            logger.info(f"笔记生成成功 (task_id={task_id})")
-            return NoteResult(markdown=markdown, transcript=transcript, audio_meta=audio_meta, gpt=gpt)
+            if not request.defer_screenshots:
+                self.lifecycle.mark_success(request.task_id)
+            logger.info("笔记生成成功 (task_id=%s)", request.task_id)
+            return NoteResult(
+                markdown=markdown,
+                transcript=transcript,
+                audio_meta=audio_meta,
+                gpt=runtime.gpt,
+            )
 
         except Exception as exc:
-            logger.error(f"生成笔记流程异常 (task_id={task_id})：{exc}", exc_info=True)
-            self._update_status(task_id, TaskStatus.FAILED, message=str(exc))
+            logger.error("生成笔记流程异常 (task_id=%s)：%s", request.task_id, exc, exc_info=True)
+            self.lifecycle.handle_exception(request.task_id, exc)
             return None
 
     @staticmethod
@@ -227,101 +215,4 @@ class NoteGenerator:
         :param platform: 平台标识
         :return: 删除的记录数
         """
-        logger.info(f"删除笔记记录 (video_id={video_id}, platform={platform})")
-        return delete_task_by_video(video_id, platform)
-
-    # ---------------- 基础设施方法 ----------------
-
-    def _init_transcriber(self) -> Transcriber:
-        """
-        根据环境变量 TRANSCRIBER_TYPE 动态获取并实例化转写器
-        """
-        if self.transcriber_type not in _transcribers:
-            logger.error(f"未找到支持的转写器：{self.transcriber_type}")
-            raise Exception(f"不支持的转写器：{self.transcriber_type}")
-
-        logger.info(f"使用转写器：{self.transcriber_type}")
-        return get_transcriber(
-            transcriber_type=self.transcriber_type,
-            model_size=self.model_size,
-        )
-
-    def _get_gpt(self, model_name: Optional[str], provider_id: Optional[str]) -> GPT:
-        """
-        根据 provider_id 获取对应的 GPT 实例
-        :param model_name: GPT 模型名称
-        :param provider_id: 供应商 ID
-        :return: GPT 实例
-        """
-        provider = ProviderService.get_provider_by_id(provider_id)
-        if not provider:
-            logger.error(f"[get_gpt] 未找到模型供应商: provider_id={provider_id}")
-            raise ProviderError(code=ProviderErrorEnum.NOT_FOUND,message=ProviderErrorEnum.NOT_FOUND.message)
-        logger.info(f"创建 GPT 实例 {provider_id}")
-        config = ModelConfig(
-            api_key=provider["api_key"],
-            base_url=provider["base_url"],
-            model_name=model_name,
-            provider=provider["type"],
-            name=provider["name"],
-        )
-        return GPTFactory().from_config(config)
-
-    def _get_downloader(self, platform: str) -> Downloader:
-        """
-        根据平台名称获取对应的下载器实例
-
-        :param platform: 平台标识，需在 SUPPORT_PLATFORM_MAP 中
-        :return: 对应的 Downloader 子类实例
-        """
-        # SUPPORT_PLATFORM_MAP 存放的是已实例化的下载器对象，直接取用即可
-        downloader = SUPPORT_PLATFORM_MAP.get(platform)
-        logger.debug(f"获取下载器 -  {platform}")
-        if not downloader:
-            logger.error(f"不支持的平台：{platform}")
-            raise NoteError(code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
-                            message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message)
-
-        logger.info(f"使用下载器：{downloader.__class__.__name__}")
-        return downloader
-
-    def _update_status(self, task_id, status, message: Optional[str] = None):
-        write_status_record(
-            task_id=task_id,
-            status=status,
-            message=message,
-            generation_token=self.generation_token,
-            output_dir=NOTE_OUTPUT_DIR,
-        )
-
-    def _handle_exception(self, task_id, exc):
-        logger.error(f"任务异常 (task_id={task_id})", exc_info=True)
-        error_message = getattr(exc, 'detail', str(exc))
-        if isinstance(error_message, dict):
-            try:
-                error_message = json.dumps(error_message, ensure_ascii=False)
-            except Exception:
-                error_message = str(error_message)
-        self._update_status(task_id, TaskStatus.FAILED, message=error_message)
-
-    def _visual_screenshot_agent(self) -> VisualScreenshotAgent:
-        return VisualScreenshotAgent(
-            image_output_dir=IMAGE_OUTPUT_DIR,
-            image_base_url=IMAGE_BASE_URL,
-            video_reader_cls=VideoReader,
-            screenshot_func=generate_screenshot,
-        )
-
-    def _save_metadata(self, video_id: str, platform: str, task_id: str) -> None:
-        """
-        将生成的笔记任务记录插入数据库
-
-        :param video_id: 视频 ID
-        :param platform: 平台标识
-        :param task_id: 任务 ID
-        """
-        try:
-            insert_video_task(video_id=video_id, platform=platform, task_id=task_id)
-            logger.info(f"已保存任务记录到数据库 (video_id={video_id}, platform={platform}, task_id={task_id})")
-        except Exception as e:
-            logger.error(f"保存任务记录失败：{e}")
+        return NoteResultStore().delete_note(video_id, platform)
