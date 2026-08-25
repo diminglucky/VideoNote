@@ -11,6 +11,8 @@ from app.utils.video_reader import FrameCandidate
 
 logger = logging.getLogger(__name__)
 
+MATERIAL_QUALITY_GAP = 0.05
+
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
@@ -295,10 +297,16 @@ class VisualFrameSelector:
     def _select_heuristic_best(self, segments: List[Any], report: dict[str, Any]) -> FrameCandidate:
         first_ts = min(segment.start for segment in segments)
         last_ts = max(segment.end for segment in segments)
-        best_raw_score = max(segment.representative.score for segment in segments)
+        best_quality_score = max(segment.representative.score for segment in segments)
         scored_segments: List[Tuple[float, Any]] = []
         for segment in segments:
-            score = self.selection_score(segment, first_ts, last_ts, best_raw_score, len(segments))
+            score = self.selection_score(
+                segment,
+                first_ts,
+                last_ts,
+                best_quality_score,
+                len(segments),
+            )
             scored_segments.append((score, segment))
             candidate = segment.representative
             report["segments"].append({
@@ -311,23 +319,21 @@ class VisualFrameSelector:
                 "selection_score": round(float(score), 4),
             })
         heuristic_best = max(scored_segments, key=lambda item: item[0])[1].representative
-        raw_best = max(
+        quality_best = max(
             (segment.representative for segment in segments),
             key=lambda item: item.score,
         )
-        if raw_best.path != heuristic_best.path:
-            preferred_score = float(os.getenv("SCREENSHOT_PREFERRED_CANDIDATE_SCORE", "0.42"))
-            weak_gap = float(os.getenv("SCREENSHOT_WEAK_SELECTION_SCORE_GAP", "0.04"))
-            score_gap = raw_best.score - heuristic_best.score
+        if quality_best.path != heuristic_best.path:
+            weak_gap = MATERIAL_QUALITY_GAP
+            score_gap = quality_best.score - heuristic_best.score
             if (
-                heuristic_best.score < preferred_score
-                and raw_best.score >= float(os.getenv("SCREENSHOT_MIN_CANDIDATE_SCORE", "0.34"))
+                quality_best.score >= float(os.getenv("SCREENSHOT_MIN_CANDIDATE_SCORE", "0.34"))
                 and score_gap >= weak_gap
             ):
                 report["heuristic_override"] = "clearer-candidate"
                 report["pre_override_timestamp"] = heuristic_best.timestamp
                 report["pre_override_score"] = round(float(heuristic_best.score), 4)
-                heuristic_best = raw_best
+                heuristic_best = quality_best
         report["heuristic_timestamp"] = heuristic_best.timestamp
         report["heuristic_score"] = round(float(heuristic_best.score), 4)
         return heuristic_best
@@ -337,29 +343,36 @@ class VisualFrameSelector:
         segment: Any,
         first_ts: int,
         last_ts: int,
-        best_raw_score: float,
+        best_quality_score: float,
         segment_count: int,
     ) -> float:
         candidate = segment.representative
         later_ratio = 0.0 if last_ts <= first_ts else (segment.end - first_ts) / (last_ts - first_ts)
-        stable_bonus = min(len(segment.frames) - 1, 5) * 0.08 + min(segment.duration / 24, 1) * 0.16
-        singleton_penalty = 0.24 if len(segment.frames) == 1 and segment_count > 1 else 0.0
-        early_penalty = 0.16 if later_ratio < 0.2 and segment_count > 1 else 0.0
-        completeness_bonus = 0.0
-        if candidate.score >= max(0.34, best_raw_score - 0.30):
-            completeness_bonus += later_ratio * 0.38
-            if len(segment.frames) > 1 and later_ratio >= 0.45:
-                completeness_bonus += 0.18
-            if later_ratio >= 0.72:
-                completeness_bonus += 0.10
-        raw_score_gap_penalty = max(0.0, best_raw_score - candidate.score - 0.26) * 0.65
+        quality_gap = max(0.0, best_quality_score - candidate.score)
+        stable_bonus = (
+            min(max(len(segment.frames) - 1, 0), 3) * 0.015
+            + min(segment.duration / 24, 1) * 0.04
+        )
+        # Temporal completeness is only a tie-breaker. It must not overturn a
+        # material raw-quality gap, which is what previously selected late but
+        # low-information frames over clearer diagrams or result screens.
+        if quality_gap < MATERIAL_QUALITY_GAP:
+            if quality_gap > 0:
+                stable_bonus = min(stable_bonus + later_ratio * 0.025, quality_gap * 0.5)
+            else:
+                stable_bonus += later_ratio * 0.025
+        else:
+            stable_bonus = 0.0
+        stable_bonus = min(stable_bonus, 0.09)
+        singleton_penalty = (
+            min(0.02, quality_gap * 0.25)
+            if len(segment.frames) == 1 and segment_count > 1
+            else 0.0
+        )
         return (
             candidate.score
             + stable_bonus
-            + completeness_bonus
             - singleton_penalty
-            - early_penalty
-            - raw_score_gap_penalty
         )
 
     @staticmethod

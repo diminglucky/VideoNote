@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, List, Optional, Type
 
-from app.utils.video_reader import VideoReader
+from app.utils.video_reader import FrameCandidate, VideoReader, probe_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +105,15 @@ class VisualInventoryAgent:
         if not path.exists():
             return []
 
-        budget = self.scan_window_budget(duration)
+        resolved_duration = duration
+        if not resolved_duration or resolved_duration <= 0:
+            resolved_duration = probe_video_duration(str(path))
+
+        budget = self.scan_window_budget(resolved_duration)
         self.last_report = VisualInventoryReport(
             budget=budget,
             min_score=float(os.getenv("VISUAL_INVENTORY_MIN_SCORE", "0.38")),
-            duration=duration,
+            duration=resolved_duration,
         )
         if budget <= 0:
             return []
@@ -121,11 +125,15 @@ class VisualInventoryAgent:
                     frame_dir=str(tmp_dir),
                     grid_dir=str(tmp_dir),
                 )
-                frame_paths = reader.extract_frames(max_frames=budget)
+                sampled_extractor = getattr(reader, "extract_sampled_frames", None)
+                if callable(sampled_extractor):
+                    frame_paths = sampled_extractor(max_frames=budget)
+                else:
+                    frame_paths = reader.extract_frames(max_frames=budget)
                 candidates = self._frame_paths_to_candidates(
                     reader,
                     frame_paths,
-                    duration=duration,
+                    duration=resolved_duration,
                     transcript_segments=transcript_segments,
                 )
                 self.last_report.extracted_frames = len(frame_paths or [])
@@ -154,6 +162,8 @@ class VisualInventoryAgent:
         transcript_segments: Optional[List[Any]],
     ) -> List[VisualSceneCandidate]:
         scored: List[tuple[int, float, List[str]]] = []
+        scored_candidates: List[FrameCandidate] = []
+        reasons_by_timestamp: dict[int, List[str]] = {}
         for frame_path in frame_paths or []:
             path = Path(frame_path)
             if not path.exists():
@@ -161,14 +171,45 @@ class VisualInventoryAgent:
             timestamp = self._timestamp_for_frame(reader, path)
             if timestamp is None:
                 continue
-            score = self._score_for_frame(reader, path)
+            score, perceptual_hash = self._score_for_frame(reader, path)
             if score < float(os.getenv("VISUAL_INVENTORY_MIN_SCORE", "0.38")):
                 continue
             reasons = self._reasons_for_frame(score, timestamp, transcript_segments)
             scored.append((timestamp, score, reasons))
+            reasons_by_timestamp[timestamp] = reasons
+            hash_func = getattr(reader, "_calculate_file_md5", None)
+            try:
+                exact_hash = str(hash_func(str(path))) if callable(hash_func) else str(path)
+            except Exception:
+                exact_hash = str(path)
+            scored_candidates.append(FrameCandidate(
+                path=str(path),
+                timestamp=timestamp,
+                score=score,
+                exact_hash=exact_hash,
+                perceptual_hash=perceptual_hash,
+            ))
 
         if not scored:
             return []
+
+        build_segments = getattr(reader, "_build_visual_segments", None)
+        if callable(build_segments) and scored_candidates:
+            try:
+                representatives = [
+                    segment.representative
+                    for segment in build_segments(scored_candidates)
+                ]
+                scored = [
+                    (
+                        candidate.timestamp,
+                        candidate.score,
+                        reasons_by_timestamp.get(candidate.timestamp, []),
+                    )
+                    for candidate in representatives
+                ]
+            except Exception as exc:
+                logger.debug("Visual inventory dedupe unavailable: %s", exc)
 
         scored.sort(key=lambda item: item[0])
         total_duration = int(duration or 0)
@@ -206,15 +247,18 @@ class VisualInventoryAgent:
         return max(0, int(timestamp))
 
     @staticmethod
-    def _score_for_frame(reader: Any, path: Path) -> float:
+    def _score_for_frame(reader: Any, path: Path) -> tuple[float, int | None]:
         scorer = getattr(reader, "_score_frame", None)
         if not scorer:
-            return 0.5
+            return 0.5, None
         try:
-            score, _hash = scorer(str(path))
-            return float(score)
+            result = scorer(str(path))
+            if isinstance(result, tuple):
+                score, perceptual_hash = result
+                return float(score), perceptual_hash
+            return float(result), None
         except Exception:
-            return 0.0
+            return 0.0, None
 
     @staticmethod
     def _reasons_for_frame(

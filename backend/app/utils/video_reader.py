@@ -49,6 +49,11 @@ def _probe_video_duration(video_path: str) -> float | None:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
+def probe_video_duration(video_path: str) -> float | None:
+    """Read the duration from the video file for callers without metadata."""
+    return _probe_video_duration(video_path)
+
+
 @dataclass
 class VideoGridImage:
     url: str
@@ -357,8 +362,8 @@ class VideoReader:
         }
         return sorted(timestamps)
 
-    def extract_frames(self, max_frames: int | None = None) -> list[str]:
-
+    def extract_sampled_frames(self, max_frames: int | None = None) -> list[str]:
+        """Extract sampled frames without scoring, deduplication, or deletion."""
         try:
             os.makedirs(self.frame_dir, exist_ok=True)
             duration = _probe_video_duration(self.video_path)
@@ -377,25 +382,36 @@ class VideoReader:
                     ts = futures[future]
                     frame_results[ts] = future.result()
 
-            # Reorder by timestamp and dedupe visually similar frames.
-            candidates = []
-            for ts in timestamps:
-                output_path = frame_results.get(ts)
-                if not output_path or not os.path.exists(output_path):
-                    continue
+            return [
+                frame_results[ts]
+                for ts in timestamps
+                if frame_results.get(ts) and os.path.exists(frame_results[ts])
+            ]
+        except Exception as e:
+            logger.error(f"Failed to extract video frames: {e}")
+            raise ValueError("Video processing failed")
 
+    def extract_frames(self, max_frames: int | None = None) -> list[str]:
+        sampled_paths = self.extract_sampled_frames(max_frames=max_frames)
+
+        try:
+            candidates = []
+            for output_path in sampled_paths:
+                timestamp = self.extract_time_from_filename(os.path.basename(output_path))
+                if timestamp == float("inf"):
+                    continue
                 exact_hash = self._calculate_file_md5(output_path)
                 score, perceptual_hash = self._score_frame(output_path)
                 candidates.append(FrameCandidate(
                     path=output_path,
-                    timestamp=ts,
+                    timestamp=int(timestamp),
                     score=score,
                     exact_hash=exact_hash,
                     perceptual_hash=perceptual_hash,
                 ))
             return self._select_useful_frames(candidates, max_frames)
         except Exception as e:
-            logger.error(f"Failed to extract video frames: {e}")
+            logger.error(f"Failed to score video frames: {e}")
             raise ValueError("Video processing failed")
 
     def group_images(self) -> list[list[str]]:
