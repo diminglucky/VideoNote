@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
@@ -8,17 +10,8 @@ from dotenv import load_dotenv
 
 from app.enmus.note_enums import DownloadQuality
 from app.agents import AgentExecutionContext, build_note_execution_plan
-from app.agents.executor import AgentRuntimeContext
 from app.agents.note_agents import AgentRuntimeServices, MarkdownComposerAgent, NoteWriterAgent
 from app.models.notes_model import NoteResult
-from app.models.note_generation import GenerationRequest
-from app.services.note_result_store import NoteResultStore
-from app.services.note_runtime import (
-    IMAGE_BASE_URL,
-    IMAGE_OUTPUT_DIR,
-    NoteRuntimeFactory,
-)
-from app.services.task_lifecycle import TaskLifecycleService
 from app.utils.note_helper import prepend_source_link
 from app.utils.video_helper import generate_screenshot
 from app.utils.video_reader import VideoReader
@@ -32,9 +25,17 @@ load_dotenv()
 # 输出目录（用于缓存音频、转写、Markdown 文件，以及存储截图）
 NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
 NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_OUTPUT_DIR = os.getenv("OUT_DIR", "./static/screenshots")
+IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/static/screenshots")
 # 日志配置
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def is_llm_agent_enabled() -> bool:
+    return os.getenv("BILINOTE_LLM_AGENT_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
 
 
 class NoteGenerator:
@@ -50,6 +51,10 @@ class NoteGenerator:
         runtime_factory: Optional[NoteRuntimeFactory] = None,
         result_store: Optional[NoteResultStore] = None,
     ):
+        from app.services.note_result_store import NoteResultStore
+        from app.services.note_runtime import NoteRuntimeFactory
+        from app.services.task_lifecycle import TaskLifecycleService
+
         self.generation_token = generation_token
         self.lifecycle = lifecycle or TaskLifecycleService(
             generation_token=generation_token,
@@ -100,6 +105,8 @@ class NoteGenerator:
         :param grid_size: 生成缩略图时的网格大小，如 [3, 3]
         :return: NoteResult 对象，包含 markdown 文本、转写结果和音频元信息
         """
+        from app.agents.executor import AgentRuntimeContext
+        from app.models.note_generation import GenerationRequest
         request = GenerationRequest.from_generate_args(
             video_url=str(video_url),
             platform=platform,
@@ -175,7 +182,29 @@ class NoteGenerator:
                 grid_size=list(request.grid_size),
             )
 
-            runtime_context = runtime.executor.run(execution_plan, runtime_context)
+            if is_llm_agent_enabled():
+                from app.agents.agent_trace import JsonlTraceStore
+                from app.agents.llm_agents import LlmNoteOrchestrator
+
+                trace_path = NOTE_OUTPUT_DIR / f"{request.task_id}.agent-trace.jsonl"
+                logger.info("启用 LLM Multi-Agent runtime (task_id=%s)", request.task_id)
+                try:
+                    note = LlmNoteOrchestrator(JsonlTraceStore(trace_path)).run(
+                        request, runtime, runtime_context
+                    )
+                    runtime_context.markdown = note.markdown
+                    runtime_context.transcript = note.transcript
+                    runtime_context.audio_meta = note.audio_meta
+                except Exception as agent_exc:
+                    logger.warning(
+                        "LLM Agent runtime failed; fallback to deterministic executor "
+                        "(task_id=%s): %s",
+                        request.task_id,
+                        agent_exc,
+                    )
+                    runtime_context = runtime.executor.run(execution_plan, runtime_context)
+            else:
+                runtime_context = runtime.executor.run(execution_plan, runtime_context)
             markdown = prepend_source_link(runtime_context.markdown or "", request.video_url)
             audio_meta = runtime_context.audio_meta
             transcript = runtime_context.transcript
@@ -215,4 +244,6 @@ class NoteGenerator:
         :param platform: 平台标识
         :return: 删除的记录数
         """
+        from app.services.note_result_store import NoteResultStore
+
         return NoteResultStore().delete_note(video_id, platform)
