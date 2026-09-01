@@ -351,8 +351,16 @@ def _submit_visual_enhancement(
             enhance_token=enhance_token,
             generation_token=generation_token,
             gpt=gpt,
+            visual_plan=getattr(note, "visual_plan", None),
         )
     )
+
+
+def _should_submit_visual_enhancement(note, wants_screenshot: bool) -> bool:
+    """Keep legacy fallback while honoring an explicit VisualAgent decline."""
+    if not wants_screenshot:
+        return False
+    return getattr(note, "visual_plan", None) != []
 
 
 def _persist_prefetched_transcript(task_id: str, transcript: dict) -> None:
@@ -447,7 +455,7 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
     if not _is_current_generation(task_id, generation_token):
         logger.info("Skip stale note completion (task_id=%s)", task_id)
         return
-    if wants_screenshot:
+    if _should_submit_visual_enhancement(note, wants_screenshot):
         write_status_record(
             task_id,
             TaskStatus.ENHANCING,

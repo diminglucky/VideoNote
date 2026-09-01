@@ -25,6 +25,7 @@ from app.agents.llm_protocol import (
     ReviewIssue,
     ReviewResult,
     ToolRegistry,
+    VisualPlanItem,
     VisualResult,
 )
 from app.agents.planner import build_note_execution_plan
@@ -54,5 +55,6 @@ __all__ = [
     "SupervisorAgent",
     "ToolRegistry",
     "VisualAgent",
+    "VisualPlanItem",
     "VisualResult",
 ]

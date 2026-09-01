@@ -52,6 +52,60 @@ class TestVisualScreenshotGraph(unittest.TestCase):
         graph = visual_screenshot_graph.build_visual_screenshot_graph()
         self.assertTrue(hasattr(graph, "invoke"))
 
+    def test_llm_visual_plan_constrains_screenshot_search_window(self):
+        from app.services.visual_screenshot_agent import VisualScreenshotAgent, VisualScreenshotState
+
+        class _Reader:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            @staticmethod
+            def _calculate_file_md5(path):
+                return pathlib.Path(path).name
+
+            @staticmethod
+            def _score_frame(_path):
+                return 0.92, 123
+
+            @staticmethod
+            def _is_same_visual_state(_left, _right):
+                return False
+
+        with ProjectTempDir("llm_plan_") as tmp_dir:
+            def _generate(_video_path, _output_dir, timestamp, index):
+                path = pathlib.Path(tmp_dir) / f"shot_{index}_{timestamp}.jpg"
+                path.write_bytes(b"image")
+                return str(path)
+
+            agent = VisualScreenshotAgent(
+                image_output_dir=tmp_dir,
+                image_base_url="/static/screenshots",
+                video_reader_cls=_Reader,
+                screenshot_func=_generate,
+            )
+            state = VisualScreenshotState(
+                markdown="## Result\nThe final result needs visual evidence.\n\n## Other\nMore text.\n",
+                video_path=pathlib.Path("video.mp4"),
+                duration=60,
+                llm_visual_plan=[{
+                    "title": "Result",
+                    "start": 10,
+                    "end": 20,
+                    "reason": "verify output",
+                    "evidence_type": "result",
+                }],
+            )
+
+            result = agent.run(state)
+
+        summary = agent.summarize_run(result)
+        self.assertEqual(summary["planned_slots"], 1)
+        self.assertEqual(summary["slots"][0]["selection"]["search_end"], 20)
+        self.assertGreaterEqual(summary["slots"][0]["candidate_timestamp"], 10)
+        self.assertLess(summary["slots"][0]["candidate_timestamp"], 20)
+        self.assertEqual(summary["slots"][0]["section"]["title"], "Result")
+        self.assertEqual(summary["slots"][0]["section"]["evidence_type"], "result")
+
     def test_real_langgraph_path_runs_agent_state(self):
         from app.services.visual_screenshot_agent import VisualScreenshotAgent, VisualScreenshotState
 

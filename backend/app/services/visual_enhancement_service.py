@@ -42,6 +42,7 @@ class VisualEnhancementService:
         on_stage_update: Optional[Callable[[str], None]] = None,
         on_progress_update: Optional[Callable[[dict[str, Any]], None]] = None,
         transcript_segments: Optional[list[Any]] = None,
+        visual_plan: Optional[list[dict[str, Any]]] = None,
     ) -> str | None:
         self._last_screenshot_summary = {}
         if self.screenshot_agent_factory:
@@ -68,6 +69,7 @@ class VisualEnhancementService:
             transcript_segments=transcript_segments,
             on_stage_update=on_stage_update,
             on_progress_update=on_progress_update,
+            visual_plan=visual_plan,
         )
         self._capture_screenshot_summary(agent)
         return result
@@ -122,6 +124,7 @@ class VisualEnhancementService:
         enhance_token: Optional[str] = None,
         generation_token: Optional[str] = None,
         gpt: Any = None,
+        visual_plan: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
         result_path = self.note_output_dir / f"{task_id}.json"
         inserted_count = 0
@@ -147,6 +150,8 @@ class VisualEnhancementService:
             markdown = payload.get("markdown") or ""
             transcript_payload = payload.get("transcript") or {}
             transcript_segments = transcript_payload.get("segments") or []
+            if visual_plan is None:
+                visual_plan = payload.get("visual_plan")
             audio_meta = self._audio_meta_from_payload(payload.get("audio_meta") or {})
             audio_meta.duration = float(duration or audio_meta.duration or 0)
             audio_meta.platform = platform or audio_meta.platform
@@ -207,6 +212,7 @@ class VisualEnhancementService:
                 on_stage_update=_publish_stage,
                 on_progress_update=_publish_progress,
                 transcript_segments=transcript_segments,
+                visual_plan=visual_plan,
             )
             screenshot_summary = self._last_screenshot_summary
 
@@ -481,6 +487,7 @@ def note_to_json_payload(note: Any) -> dict[str, Any]:
         "audio_meta": convert(note.audio_meta),
         "enhance_token": getattr(note, "enhance_token", None),
         "generation_token": getattr(note, "generation_token", None),
+        "visual_plan": convert(getattr(note, "visual_plan", None)),
     }
 
 
@@ -500,4 +507,5 @@ def result_from_payload(payload: dict[str, Any]):
         markdown=payload.get("markdown") or "",
         transcript=transcript,
         audio_meta=audio_meta,
+        visual_plan=payload.get("visual_plan"),
     )

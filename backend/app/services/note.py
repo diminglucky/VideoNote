@@ -38,6 +38,11 @@ def is_llm_agent_enabled() -> bool:
     }
 
 
+def _reset_llm_visual_decision_for_fallback(runtime_context) -> None:
+    """Prevent a failed partial Agent run from changing legacy visual behavior."""
+    runtime_context.visual_plan = None
+
+
 class NoteGenerator:
     """
     NoteGenerator 用于执行视频/音频下载、转写、GPT 生成笔记、插入截图/链接、
@@ -180,6 +185,7 @@ class NoteGenerator:
                 video_understanding=request.video_understanding,
                 video_interval=request.video_interval,
                 grid_size=list(request.grid_size),
+                defer_screenshots=request.defer_screenshots,
             )
 
             if is_llm_agent_enabled():
@@ -202,6 +208,7 @@ class NoteGenerator:
                         request.task_id,
                         agent_exc,
                     )
+                    _reset_llm_visual_decision_for_fallback(runtime_context)
                     runtime_context = runtime.executor.run(execution_plan, runtime_context)
             else:
                 runtime_context = runtime.executor.run(execution_plan, runtime_context)
@@ -228,6 +235,7 @@ class NoteGenerator:
                 transcript=transcript,
                 audio_meta=audio_meta,
                 gpt=runtime.gpt,
+                visual_plan=getattr(runtime_context, "visual_plan", None),
             )
 
         except Exception as exc:

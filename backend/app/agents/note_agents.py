@@ -102,6 +102,7 @@ class VisualEnhancementRequest:
     enhance_token: str
     generation_token: Optional[str] = None
     gpt: Optional[Any] = None
+    visual_plan: Optional[list[dict[str, Any]]] = None
 
 
 class DownloadAgent:
@@ -607,6 +608,7 @@ class VisualEnhancementAgent:
                 request.enhance_token,
                 request.generation_token,
                 request.gpt,
+                request.visual_plan,
             )
         except Exception as exc:
             logger.exception(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -26,6 +27,14 @@ from app.agents.note_agent_tools import build_note_agent_registry
 from app.models.notes_model import NoteResult
 
 logger = logging.getLogger(__name__)
+
+
+def _remove_visual_markers(markdown: str) -> str:
+    return re.sub(
+        r"\*?Screenshot-(?:\[\d{2}:\d{2}\]|\d{2}:\d{2})\*?",
+        "",
+        markdown or "",
+    )
 
 
 ACTION_TOOL = {
@@ -59,7 +68,8 @@ ROLE_PROMPTS = {
     ),
     "visual": (
         "你是 VisualAgent。只负责判断章节是否需要视觉证据并使用已注册的视觉工具。"
-        "不得访问任意文件或执行命令；输出 JSON: {requested, summary}。"
+        "不得访问任意文件或执行命令；输出 JSON: "
+        "{requested, summary, plans:[{title,start,end,reason,evidence_type}]}。"
     ),
     "reviewer": (
         "你是 ReviewerAgent。只负责评审当前笔记并输出 JSON: "
@@ -76,6 +86,8 @@ def _state_view(state: AgentState) -> dict[str, Any]:
         "transcript_summary": state.transcript_summary[:4000],
         "markdown": state.markdown[:6000],
         "visual_requested": state.visual_requested,
+        "visual_decided": state.visual_decided,
+        "visual_plan": state.visual_plan,
         "visual_summary": state.visual_summary,
         "review": state.review,
         "artifacts": state.artifacts,
@@ -193,8 +205,16 @@ class VisualAgent:
         self.client = client
 
     def run(self, state: AgentState, tools: ToolRegistry) -> Observation:
+        runtime_context = state.runtime_context
+        deferred = bool(getattr(runtime_context, "defer_screenshots", False))
+        visual_prompt = ROLE_PROMPTS["visual"]
+        if deferred:
+            visual_prompt += (
+                "当前截图增强由异步产品 worker 执行；本轮只允许读取元数据并输出视觉计划，"
+                "不要调用 enhance_visuals。"
+            )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": ROLE_PROMPTS["visual"]},
+            {"role": "system", "content": visual_prompt},
             {"role": "user", "content": json.dumps(_state_view(state), ensure_ascii=False)},
         ]
         payload: dict[str, Any] = {}
@@ -215,6 +235,20 @@ class VisualAgent:
                 except json.JSONDecodeError:
                     arguments = None
                 if tool_name == "enhance_visuals":
+                    if deferred:
+                        observation = Observation(
+                            ok=False,
+                            summary="visual enhancement is deferred to the async worker",
+                            error_type="visual_deferred",
+                        )
+                        self.client.trace_store.append({
+                            "kind": "specialist_tool_observation",
+                            "task_id": state.task_id,
+                            "agent": "visual",
+                            "tool": tool_name,
+                            **observation.model_dump(),
+                        })
+                        return observation
                     if not state.budget.can_retry_visual(state.visual_retries):
                         observation = Observation(
                             ok=False,
@@ -267,8 +301,15 @@ class VisualAgent:
             return Observation(ok=False, summary="VisualAgent returned no final output", error_type="invalid_agent_output")
         visual = VisualResult.model_validate(payload)
         state.visual_requested = visual.requested
+        state.visual_decided = True
+        state.visual_plan = [plan.model_dump() for plan in visual.plans] if visual.requested else []
         state.visual_summary["summary"] = visual.summary or state.visual_summary.get("summary", "")
-        return Observation(ok=True, summary="VisualAgent completed", data=state.visual_summary)
+        state.visual_summary["plan_count"] = len(state.visual_plan)
+        return Observation(
+            ok=True,
+            summary="VisualAgent completed",
+            data={**state.visual_summary, "visual_plan": state.visual_plan},
+        )
 
 
 def _message_json(message: Any) -> dict[str, Any]:
@@ -314,51 +355,65 @@ class SupervisorAgent:
         self.reviewer = ReviewerAgent(self.client)
 
     def run(self, state: AgentState, registry: ToolRegistry) -> AgentState:
-        while not state.finished and state.budget.can_decide(state.decisions):
-            state.decisions += 1
-            try:
-                message = self.client.complete(
-                    "supervisor",
-                    [
-                        {"role": "system", "content": "你是 SupervisorAgent。根据状态选择下一步，必须调用 submit_action。"},
-                        {"role": "user", "content": json.dumps(_state_view(state), ensure_ascii=False)},
-                    ],
-                    tools=[ACTION_TOOL],
-                    task_id=state.task_id,
-                )
-                action = AgentAction.model_validate(_message_json(message))
-            except (ValueError, ValidationError, TypeError) as exc:
-                self._diagnose(state, "invalid_action", str(exc))
-                self._terminate_degraded(state, "invalid_action")
-                break
-
-            self.trace_store.append({"kind": "decision", "task_id": state.task_id, **action.model_dump()})
-            try:
-                observation = self._execute(action, state, registry)
-            except (ValueError, ValidationError, TypeError) as exc:
-                observation = Observation(
-                    ok=False,
-                    summary=str(exc) or "Specialist returned invalid output",
-                    error_type="invalid_agent_output",
-                )
-            self.trace_store.append({"kind": "observation", "task_id": state.task_id, **observation.model_dump()})
-            if observation.data.get("transcript"):
-                state.transcript_summary = str(observation.data["transcript"])
-            if not observation.ok:
-                state.diagnostics.append(f"{observation.error_type}: {observation.summary}")
-                if observation.error_type in {
-                    "invalid_action",
-                    "unknown_agent",
-                    "unknown_tool",
-                    "invalid_arguments",
-                    "invalid_agent_output",
-                    "budget_exhausted",
-                }:
-                    self._terminate_degraded(state, observation.error_type)
+        try:
+            while not state.finished and state.budget.can_decide(state.decisions):
+                state.decisions += 1
+                try:
+                    message = self.client.complete(
+                        "supervisor",
+                        [
+                            {"role": "system", "content": "你是 SupervisorAgent。根据状态选择下一步，必须调用 submit_action。"},
+                            {"role": "user", "content": json.dumps(_state_view(state), ensure_ascii=False)},
+                        ],
+                        tools=[ACTION_TOOL],
+                        task_id=state.task_id,
+                    )
+                    action = AgentAction.model_validate(_message_json(message))
+                except (ValueError, ValidationError, TypeError) as exc:
+                    self._diagnose(state, "invalid_action", str(exc))
+                    self._terminate_degraded(state, "invalid_action")
                     break
 
-        if not state.finished:
-            self._terminate_degraded(state, "decision_budget_exhausted_or_invalid_action")
+                self.trace_store.append({"kind": "decision", "task_id": state.task_id, **action.model_dump()})
+                try:
+                    observation = self._execute(action, state, registry)
+                except (ValueError, ValidationError, TypeError) as exc:
+                    observation = Observation(
+                        ok=False,
+                        summary=str(exc) or "Specialist returned invalid output",
+                        error_type="invalid_agent_output",
+                    )
+                self.trace_store.append({"kind": "observation", "task_id": state.task_id, **observation.model_dump()})
+                if observation.data.get("transcript"):
+                    state.transcript_summary = str(observation.data["transcript"])
+                if not observation.ok:
+                    state.diagnostics.append(f"{observation.error_type}: {observation.summary}")
+                    if observation.error_type in {
+                        "invalid_action",
+                        "unknown_agent",
+                        "unknown_tool",
+                        "invalid_arguments",
+                        "invalid_agent_output",
+                        "budget_exhausted",
+                        "visual_deferred",
+                    }:
+                        self._terminate_degraded(state, observation.error_type)
+                        break
+
+            if not state.finished:
+                self._terminate_degraded(state, "decision_budget_exhausted_or_invalid_action")
+        finally:
+            self.trace_store.append({
+                "kind": "final_state",
+                "task_id": state.task_id,
+                "status": state.final_status,
+                "decisions": state.decisions,
+                "content_revisions": state.content_revisions,
+                "visual_attempts": state.visual_attempts,
+                "visual_retries": state.visual_retries,
+                "tool_calls": state.tool_calls,
+                "diagnostics": state.diagnostics[-10:],
+            })
         return state
 
     @staticmethod
@@ -373,6 +428,12 @@ class SupervisorAgent:
             if not action.tool:
                 return Observation(ok=False, summary="call_tool requires tool", error_type="invalid_action")
             if action.tool == "enhance_visuals":
+                if getattr(state.runtime_context, "defer_screenshots", False):
+                    return Observation(
+                        ok=False,
+                        summary="visual enhancement is deferred to the async worker",
+                        error_type="visual_deferred",
+                    )
                 if not state.budget.can_retry_visual(state.visual_retries):
                     return Observation(ok=False, summary="Visual retry budget exhausted", error_type="budget_exhausted")
                 state.visual_attempts += 1
@@ -382,7 +443,10 @@ class SupervisorAgent:
             if action.agent == "content":
                 return self.content.run(state, registry.scoped(("get_video_info", "get_subtitles", "transcribe_audio")))
             if action.agent == "visual":
-                return self.visual.run(state, registry.scoped(("get_video_info", "enhance_visuals")))
+                allowed_tools = ("get_video_info",)
+                if not getattr(state.runtime_context, "defer_screenshots", False):
+                    allowed_tools = ("get_video_info", "enhance_visuals")
+                return self.visual.run(state, registry.scoped(allowed_tools))
             return Observation(ok=False, summary="unknown delegate", error_type="unknown_agent")
         if action.action == "review":
             return self.reviewer.run(state)
@@ -394,16 +458,32 @@ class SupervisorAgent:
             }
             if action.agent is None and "content" in issue_categories:
                 action = action.model_copy(update={"agent": "content"})
-            if action.agent != "content":
-                return Observation(ok=False, summary="Only ContentAgent can revise content issues", error_type="invalid_action")
-            if not state.budget.can_revise_content(state.content_revisions):
-                return Observation(ok=False, summary="Content revision budget exhausted", error_type="budget_exhausted")
-            state.content_revisions += 1
-            return self.content.run(
-                state,
-                registry.scoped(("get_video_info", "get_subtitles", "transcribe_audio")),
-                revision=True,
-            )
+            if action.agent == "content":
+                if not state.budget.can_revise_content(state.content_revisions):
+                    return Observation(ok=False, summary="Content revision budget exhausted", error_type="budget_exhausted")
+                state.content_revisions += 1
+                return self.content.run(
+                    state,
+                    registry.scoped(("get_video_info", "get_subtitles", "transcribe_audio")),
+                    revision=True,
+                )
+            if action.agent is None and "visual" in issue_categories:
+                action = action.model_copy(update={"agent": "visual"})
+            if action.agent == "visual":
+                if "visual" not in issue_categories:
+                    return Observation(
+                        ok=False,
+                        summary="VisualAgent can only revise visual issues",
+                        error_type="invalid_action",
+                    )
+                if not state.budget.can_retry_visual(state.visual_retries):
+                    return Observation(ok=False, summary="Visual retry budget exhausted", error_type="budget_exhausted")
+                state.visual_retries += 1
+                allowed_tools = ("get_video_info",)
+                if not getattr(state.runtime_context, "defer_screenshots", False):
+                    allowed_tools = ("get_video_info", "enhance_visuals")
+                return self.visual.run(state, registry.scoped(allowed_tools))
+            return Observation(ok=False, summary="Revision agent does not match review issues", error_type="invalid_action")
         if action.action == "degrade":
             state.final_status = "degraded"
             state.finished = True
@@ -440,6 +520,15 @@ class LlmNoteOrchestrator:
         if not final_state.markdown:
             raise RuntimeError("LLM Agent runtime completed without a Markdown artifact")
         runtime_context.markdown = final_state.markdown
+        if final_state.visual_decided:
+            runtime_context.visual_plan = (
+                final_state.visual_plan if final_state.visual_requested else []
+            )
+            if not final_state.visual_requested:
+                final_state.markdown = _remove_visual_markers(final_state.markdown)
+                runtime_context.markdown = final_state.markdown
+        else:
+            runtime_context.visual_plan = None
         if getattr(runtime_context, "markdown_cache_file", None):
             runtime_context.markdown_cache_file.write_text(final_state.markdown, encoding="utf-8")
         runtime_context.diagnostics.extend(final_state.diagnostics)
@@ -448,6 +537,15 @@ class LlmNoteOrchestrator:
             transcript=runtime_context.transcript,
             audio_meta=runtime_context.audio_meta,
             gpt=runtime.gpt,
+            visual_plan=(
+                (
+                    final_state.visual_plan
+                    if final_state.visual_requested
+                    else []
+                )
+                if final_state.visual_decided
+                else None
+            ),
         )
 
     @staticmethod

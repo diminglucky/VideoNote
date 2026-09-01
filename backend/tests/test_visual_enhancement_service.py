@@ -118,6 +118,71 @@ class TestVisualEnhancementService(unittest.TestCase):
         self.assertEqual(status_updates[-1][1], "SUCCESS")
         reindex.assert_called_once_with("task-1")
 
+    def test_enhance_saved_note_reads_llm_visual_plan_and_passes_it_to_agent(self):
+        VisualEnhancementService = self._load_service()
+        received = []
+
+        class _ScreenshotAgent:
+            def insert_screenshots(self, markdown, video_path, duration, gpt, on_markdown_update=None, visual_plan=None):
+                received.append(visual_plan)
+                return markdown
+
+        with ProjectTempDir() as tmp_dir:
+            result_path = self._write_result(tmp_dir)
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            payload["visual_plan"] = [{
+                "title": "结果",
+                "start": 10,
+                "end": 20,
+                "reason": "verify",
+                "evidence_type": "result",
+            }]
+            result_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            changed = VisualEnhancementService(
+                tmp_dir,
+                screenshot_agent_factory=_ScreenshotAgent,
+            ).enhance_saved_note(
+                "task-1", "video.mp4", 60, "bilibili",
+                enhance_token="token-1", generation_token="generation-1",
+            )
+
+        assert changed is False
+        assert received == [payload["visual_plan"]]
+
+    def test_enhance_saved_note_persists_visual_plan_when_incremental_writeback_occurs(self):
+        VisualEnhancementService = self._load_service()
+
+        class _ScreenshotAgent:
+            def insert_screenshots(self, markdown, *_args, **kwargs):
+                assert kwargs["visual_plan"][0]["start"] == 10
+                return markdown + "\n![](/static/screenshots/result.jpg)\n"
+
+        with ProjectTempDir() as tmp_dir:
+            result_path = self._write_result(tmp_dir)
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            payload["visual_plan"] = [{
+                "title": "结果",
+                "start": 10,
+                "end": 20,
+                "reason": "verify",
+                "evidence_type": "result",
+            }]
+            result_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            changed = VisualEnhancementService(
+                tmp_dir,
+                screenshot_agent_factory=_ScreenshotAgent,
+            ).enhance_saved_note(
+                "task-1", "video.mp4", 60, "bilibili",
+                enhance_token="token-1", generation_token="generation-1",
+            )
+
+            saved = json.loads(result_path.read_text(encoding="utf-8"))
+
+        assert changed is True
+        assert saved["visual_plan"] == payload["visual_plan"]
+
     def test_enhance_saved_note_marks_partial_when_planned_slot_fails(self):
         VisualEnhancementService = self._load_service()
         status_updates = []

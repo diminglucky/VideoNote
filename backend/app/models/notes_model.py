@@ -11,3 +11,4 @@ class NoteResult:
     transcript: TranscriptResult                # Whisper 转写结果
     audio_meta: AudioDownloadResult  # 音频下载的元信息（title、duration、封面等）
     gpt: Optional[Any] = None      # Runtime-only model instance for async visual review
+    visual_plan: Optional[list[dict[str, Any]]] = None  # Validated LLM visual requests

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,9 @@ from app.agents.llm_protocol import AgentState
 from app.enmus.note_enums import DownloadQuality
 from app.models.note_generation import GenerationRequest
 from app.models.transcriber_model import TranscriptSegment, TranscriptResult
-from app.services.note import is_llm_agent_enabled
+from app.services.note import _reset_llm_visual_decision_for_fallback, is_llm_agent_enabled
+from app.services.visual_enhancement_service import note_to_json_payload
+from app.routers.note import _should_submit_visual_enhancement
 
 
 def _request():
@@ -153,3 +156,181 @@ def test_enabled_runtime_returns_compatible_note_result_and_trace(tmp_path, monk
     trace = [json.loads(line) for line in (tmp_path / "task-1.agent-trace.jsonl").read_text(encoding="utf-8").splitlines()]
     assert any(item.get("kind") == "decision" and item.get("action") == "call_tool" for item in trace)
     assert all("api_key" not in item for item in trace)
+
+
+def test_enabled_runtime_returns_visual_plan_for_persistence(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINOTE_LLM_AGENT_ENABLED", "true")
+    context = _runtime_context(tmp_path)
+
+    class PlannedClient(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.responses = [
+                {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
+                {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
+                {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
+                {"markdown": "# Agent note", "summary": "draft"},
+                {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "plan", "expected": "visual"},
+                {"requested": True, "summary": "need result", "plans": [{"title": "结果", "start": 10, "end": 20, "reason": "verify", "evidence_type": "result"}]},
+                {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
+                {"passed": True, "issues": []},
+                {"action": "finish", "arguments": {}, "reason": "accepted", "expected": "result"},
+            ]
+
+    client = PlannedClient()
+    gpt = FakeGPT(client)
+    context.gpt = gpt
+    context.wants_screenshot = True
+    runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
+
+    result = LlmNoteOrchestrator(
+        trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
+    ).run(_request(), runtime, context)
+
+    assert result.visual_plan == [
+        {"title": "结果", "start": 10, "end": 20, "reason": "verify", "evidence_type": "result"}
+    ]
+
+
+def test_enabled_runtime_keeps_legacy_visual_fallback_when_visual_agent_is_not_delegated(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINOTE_LLM_AGENT_ENABLED", "true")
+    context = _runtime_context(tmp_path)
+    context.wants_screenshot = True
+    client = ScriptedClient()
+    gpt = FakeGPT(client)
+    context.gpt = gpt
+    runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
+
+    result = LlmNoteOrchestrator(
+        trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
+    ).run(replace(_request(), wants_screenshot=True), runtime, context)
+
+    assert result.visual_plan is None
+    assert context.visual_plan is None
+
+
+def test_enabled_runtime_persists_empty_visual_plan_when_visual_agent_declines(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINOTE_LLM_AGENT_ENABLED", "true")
+    context = _runtime_context(tmp_path)
+    context.wants_screenshot = True
+
+    class DecliningClient(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.responses = [
+                {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
+                {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
+                {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
+                {"markdown": "# Agent note", "summary": "draft"},
+                {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "decide", "expected": "visual"},
+                {"requested": False, "summary": "无需视觉证据", "plans": []},
+                {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
+                {"passed": True, "issues": []},
+                {"action": "finish", "arguments": {}, "reason": "accepted", "expected": "result"},
+            ]
+
+    client = DecliningClient()
+    gpt = FakeGPT(client)
+    context.gpt = gpt
+    runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
+
+    result = LlmNoteOrchestrator(
+        trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
+    ).run(replace(_request(), wants_screenshot=True), runtime, context)
+
+    assert result.visual_plan == []
+    assert context.visual_plan == []
+
+
+def test_enabled_runtime_removes_visual_markers_when_visual_agent_declines(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINOTE_LLM_AGENT_ENABLED", "true")
+    context = _runtime_context(tmp_path)
+
+    class DecliningClient(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.responses = [
+                {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
+                {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
+                {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
+                {"markdown": "# Agent note\n\n*Screenshot-[00:10]", "summary": "draft"},
+                {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "decide", "expected": "visual"},
+                {"requested": False, "summary": "无需视觉证据", "plans": []},
+                {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
+                {"passed": True, "issues": []},
+                {"action": "finish", "arguments": {}, "reason": "accepted", "expected": "result"},
+            ]
+
+    client = DecliningClient()
+    gpt = FakeGPT(client)
+    context.gpt = gpt
+    runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
+
+    result = LlmNoteOrchestrator(
+        trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
+    ).run(replace(_request(), wants_screenshot=True), runtime, context)
+
+    assert "Screenshot-" not in result.markdown
+    assert "Screenshot-" not in context.markdown
+
+
+def test_runtime_context_carries_deferred_screenshot_boundary():
+    from app.agents.executor import AgentRuntimeContext
+
+    context = AgentRuntimeContext(
+        task_id="task-1",
+        video_url="https://example.com/video",
+        platform="youtube",
+        quality=DownloadQuality.medium,
+        formats=[],
+        wants_screenshot=True,
+        wants_link=False,
+        note_output_dir=Path("."),
+        downloader=object(),
+        gpt=object(),
+        defer_screenshots=True,
+    )
+
+    assert context.defer_screenshots is True
+
+
+def test_fallback_reset_removes_partial_llm_visual_decision():
+    context = SimpleNamespace(visual_plan=[])
+
+    _reset_llm_visual_decision_for_fallback(context)
+
+    assert context.visual_plan is None
+
+
+def test_explicit_visual_decline_skips_async_worker_but_legacy_none_keeps_it():
+    assert _should_submit_visual_enhancement(
+        SimpleNamespace(visual_plan=[]),
+        wants_screenshot=True,
+    ) is False
+    assert _should_submit_visual_enhancement(
+        SimpleNamespace(visual_plan=None),
+        wants_screenshot=True,
+    ) is True
+    assert _should_submit_visual_enhancement(
+        SimpleNamespace(visual_plan=[{"title": "结果"}]),
+        wants_screenshot=True,
+    ) is True
+
+
+def test_note_result_payload_persists_validated_visual_plan():
+    note = SimpleNamespace(
+        markdown="# note",
+        transcript=SimpleNamespace(language="zh", full_text="text", segments=[]),
+        audio_meta=SimpleNamespace(file_path="audio.mp3"),
+        visual_plan=[{
+            "title": "结果",
+            "start": 10,
+            "end": 20,
+            "reason": "verify",
+            "evidence_type": "result",
+        }],
+    )
+
+    payload = note_to_json_payload(note)
+
+    assert payload["visual_plan"] == note.visual_plan

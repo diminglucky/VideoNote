@@ -24,6 +24,7 @@ class VisualSectionPlan:
     context: str = ""
     insert_line: Optional[int] = None
     insert_reason: str = ""
+    evidence_type: Optional[str] = None
 
 
 @dataclass

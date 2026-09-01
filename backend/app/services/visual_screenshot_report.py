@@ -8,7 +8,7 @@ def image_markdown_url(image_markdown: str) -> str:
 
 
 def visual_plan_report(plan: Any) -> dict[str, Any]:
-    return {
+    report = {
         "title": getattr(plan, "title", ""),
         "start": getattr(plan, "start", 0),
         "end": getattr(plan, "end", 0),
@@ -20,6 +20,10 @@ def visual_plan_report(plan: Any) -> dict[str, Any]:
         "insert_line": getattr(plan, "insert_line", None),
         "insert_reason": getattr(plan, "insert_reason", ""),
     }
+    evidence_type = getattr(plan, "evidence_type", None)
+    if evidence_type:
+        report["evidence_type"] = evidence_type
+    return report
 
 
 def slot_report_base(slot: Any) -> dict[str, Any]:

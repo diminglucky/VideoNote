@@ -39,6 +39,7 @@ class AgentRuntimeContext:
     video_understanding: bool = False
     video_interval: int = 0
     grid_size: list[int] = field(default_factory=list)
+    defer_screenshots: bool = False
     audio_cache_file: Optional[Path] = None
     transcript_cache_file: Optional[Path] = None
     markdown_cache_file: Optional[Path] = None
@@ -49,6 +50,7 @@ class AgentRuntimeContext:
     video_img_urls: list[str] = field(default_factory=list)
     result: Optional[NoteResult] = None
     diagnostics: list[str] = field(default_factory=list)
+    visual_plan: Optional[list[dict[str, Any]]] = None
 
     def __post_init__(self):
         self.audio_cache_file = self.audio_cache_file or self.note_output_dir / f"{self.task_id}_audio.json"
@@ -109,6 +111,7 @@ class PlanExecutor:
             transcript=context.transcript,
             audio_meta=context.audio_meta,
             gpt=context.gpt,
+            visual_plan=context.visual_plan,
         )
         return context
 

@@ -42,6 +42,7 @@ from app.services.visual_slot_result_assembler import (
     cleanup_paths as cleanup_visual_paths,
 )
 from app.services.visual_screenshot_graph import run_visual_screenshot_graph
+from app.agents.llm_protocol import VisualPlanItem
 from app.utils.screenshot_marker import extract_screenshot_timestamps, normalize_screenshot_markers
 from app.utils.video_helper import generate_screenshot
 from app.utils.video_reader import FrameCandidate, VideoReader
@@ -75,6 +76,7 @@ class VisualScreenshotState:
     transcript_segments: Optional[List[Any]] = None
     matches: Optional[List[Tuple[str, int]]] = None
     visual_plans: Optional[List[VisualSectionPlan]] = None
+    llm_visual_plan: Optional[List[dict[str, Any]]] = None
     slots: Optional[List[VisualScreenshotSlot]] = None
     generated_images: Optional[List[Tuple[int, str]]] = None
     generated_image_paths: Optional[List[str]] = None
@@ -142,6 +144,7 @@ class VisualScreenshotAgent:
         transcript_segments: Optional[List[Any]] = None,
         on_stage_update: Optional[Callable[[str], None]] = None,
         on_progress_update: Optional[Callable[[dict[str, Any]], None]] = None,
+        visual_plan: Optional[List[dict[str, Any]]] = None,
     ) -> str | None:
         state = self.run(VisualScreenshotState(
             markdown=markdown,
@@ -150,6 +153,7 @@ class VisualScreenshotAgent:
             gpt=gpt,
             on_markdown_update=on_markdown_update,
             transcript_segments=transcript_segments,
+            llm_visual_plan=visual_plan,
             on_stage_update=on_stage_update,
             on_progress_update=on_progress_update,
         ))
@@ -201,12 +205,19 @@ class VisualScreenshotAgent:
                 state,
                 f"已发现 {len(state.visual_inventory or [])} 个候选画面，正在分析插图位置",
             )
-        state.visual_plans = self.plan_visual_screenshots(
-            state.markdown,
-            state.duration,
-            transcript_segments=state.transcript_segments,
-            visual_inventory=state.visual_inventory,
-        )
+        if state.llm_visual_plan is None:
+            state.visual_plans = self.plan_visual_screenshots(
+                state.markdown,
+                state.duration,
+                transcript_segments=state.transcript_segments,
+                visual_inventory=state.visual_inventory,
+            )
+        else:
+            state.visual_plans = self._validated_llm_visual_plans(
+                state.llm_visual_plan,
+                state.duration,
+                state.markdown,
+            )
         state.slots = []
         state.generated_images = []
         state.generated_image_paths = []
@@ -275,6 +286,10 @@ class VisualScreenshotAgent:
     def filter_marker_node(self, state: VisualScreenshotState) -> VisualScreenshotState:
         matches = state.matches or []
         visual_plans = state.visual_plans or []
+        if state.llm_visual_plan is not None and not visual_plans:
+            state.markdown = self._remove_screenshot_markers(state.markdown)
+            state.matches = []
+            return state
         if matches:
             state.markdown, state.matches = self.filter_screenshot_matches_by_structure(
                 state.markdown,
@@ -282,6 +297,14 @@ class VisualScreenshotAgent:
                 visual_plans,
             )
         return state
+
+    @staticmethod
+    def _remove_screenshot_markers(markdown: str) -> str:
+        return re.sub(
+            r"(?:\*Screenshot-\[[^\]]+\]|\*Screenshot-\d+)",
+            "",
+            markdown,
+        )
 
     def compose_images_node(self, state: VisualScreenshotState) -> VisualScreenshotState:
         if state.slots is None or (
@@ -321,6 +344,65 @@ class VisualScreenshotAgent:
 
     def plan_screenshot_slots(self, state: VisualScreenshotState) -> List[VisualScreenshotSlot]:
         return self.slot_planner.plan(state.matches or [], state.visual_plans or [])
+
+    @staticmethod
+    def _validated_llm_visual_plans(
+        raw_plans: List[dict[str, Any]],
+        duration: Optional[float],
+        markdown: str = "",
+    ) -> List[VisualSectionPlan]:
+        plans: List[VisualSectionPlan] = []
+        headings = [
+            (line_index, re.sub(r"^#{1,6}\s+", "", line).strip())
+            for line_index, line in enumerate(markdown.splitlines())
+            if re.match(r"^#{1,6}\s+", line.strip())
+        ]
+        for raw in raw_plans[:12]:
+            try:
+                item = VisualPlanItem.model_validate(raw)
+            except Exception as exc:
+                logger.warning("忽略无效的 LLM 视觉计划: %s", exc)
+                continue
+            start = item.start
+            end = item.end
+            if duration and duration > 0:
+                if start >= int(duration):
+                    continue
+                end = min(end, max(start + 1, int(duration)))
+            matched_heading_index = next(
+                (
+                    line_index
+                    for line_index, heading in headings
+                    if heading.casefold() == item.title.casefold()
+                    or item.title.casefold() in heading.casefold()
+                    or heading.casefold() in item.title.casefold()
+                ),
+                None,
+            )
+            heading_index = matched_heading_index if matched_heading_index is not None else 0
+            next_heading_index = next(
+                (
+                    line_index
+                    for line_index, _heading in headings
+                    if matched_heading_index is not None and line_index > heading_index
+                ),
+                len(markdown.splitlines()),
+            )
+            plans.append(VisualSectionPlan(
+                title=item.title,
+                start=start,
+                end=end,
+                score=1.0,
+                reasons=[item.reason] if item.reason else [item.evidence_type],
+                line_index=heading_index,
+                section_start=start,
+                section_end=end,
+                context=item.reason,
+                insert_line=next_heading_index if matched_heading_index is not None else None,
+                insert_reason="llm-plan-heading" if matched_heading_index is not None else "",
+                evidence_type=item.evidence_type,
+            ))
+        return plans
 
     def process_screenshot_slot(
         self,

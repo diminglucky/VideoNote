@@ -1,8 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.agents.agent_trace import JsonlTraceStore
 from app.agents.llm_agents import ContentAgent, LlmAgentClient, SupervisorAgent
-from app.agents.llm_protocol import AgentState, Observation, ToolRegistry
+from pydantic import ValidationError
+
+from app.agents.llm_protocol import AgentState, Observation, ToolRegistry, VisualResult
 
 
 def _tool_call(arguments, name="submit_action"):
@@ -82,6 +86,27 @@ def test_supervisor_switches_from_failed_subtitles_to_transcription(tmp_path):
     assert final_state.final_status == "completed"
     assert final_state.decisions == 5
     assert len(client.calls) == 7  # five Supervisor calls plus Content and Reviewer calls
+
+
+def test_supervisor_records_terminal_state_for_observability(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    client = ScriptedClient([_action("finish", reason="done")])
+    state = AgentState(task_id="task-terminal-trace", user_goal="生成笔记")
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(trace_path)
+    ).run(state, ToolRegistry())
+
+    events = [
+        __import__("json").loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    terminal = [event for event in events if event.get("kind") == "final_state"][-1]
+
+    assert final_state.final_status == "completed"
+    assert terminal["status"] == "completed"
+    assert terminal["decisions"] == 1
+    assert terminal["task_id"] == "task-terminal-trace"
 
 
 def test_content_revision_is_limited_and_review_issues_are_structured(tmp_path):
@@ -249,6 +274,7 @@ def test_content_agent_can_query_allowlisted_tool_before_writing(tmp_path):
         def __init__(self):
             super().__init__([])
             self.step = 0
+            self.visual_calls = 0
 
         def create(self, **kwargs):
             self.calls.append(kwargs)
@@ -324,6 +350,214 @@ def test_visual_agent_can_call_allowlisted_visual_tool(tmp_path):
     assert state.visual_requested is True
     assert state.visual_summary["summary"] == "visual evidence added"
     assert len(client.calls) == 2
+
+
+def test_visual_result_rejects_inverted_time_window():
+    with pytest.raises(ValidationError):
+        VisualResult(
+            requested=True,
+            plans=[
+                {
+                    "title": "结果",
+                    "start": 90,
+                    "end": 30,
+                    "reason": "需要结果证据",
+                    "evidence_type": "result",
+                }
+            ],
+        )
+
+
+def test_visual_plan_rejects_untrusted_path_and_token_fields():
+    with pytest.raises(ValidationError):
+        VisualResult(
+            requested=True,
+            plans=[{
+                "title": "结果",
+                "start": 10,
+                "end": 20,
+                "reason": "需要结果证据",
+                "evidence_type": "result",
+                "path": "C:/secret.mp4",
+                "token": "secret",
+            }],
+        )
+
+
+def test_visual_agent_publishes_bounded_structured_plan(tmp_path):
+    class PlannedVisualClient(ScriptedClient):
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                tool_calls=[],
+                content=(
+                    '{"requested":true,"summary":"需要运行结果截图",'
+                    '"plans":[{"title":"运行结果","start":320,"end":390,'
+                    '"reason":"证明最终输出","evidence_type":"result"}]}'
+                ),
+            ))])
+
+    client = PlannedVisualClient([])
+    state = AgentState(task_id="task-visual-plan", user_goal="补充视觉证据")
+    result = __import__("app.agents.llm_agents", fromlist=["VisualAgent"]).VisualAgent(
+        LlmAgentClient(FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl"))
+    ).run(state, ToolRegistry())
+
+    assert result.ok is True
+    assert state.visual_requested is True
+    assert state.visual_plan == [
+        {
+            "title": "运行结果",
+            "start": 320,
+            "end": 390,
+            "reason": "证明最终输出",
+            "evidence_type": "result",
+        }
+    ]
+
+
+def test_visual_agent_marks_visual_decision_when_it_explicitly_declines(tmp_path):
+    class DecliningVisualClient(ScriptedClient):
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                tool_calls=[],
+                content='{"requested":false,"summary":"本视频无需视觉证据","plans":[]}',
+            ))])
+
+    from app.agents.llm_agents import VisualAgent
+
+    state = AgentState(task_id="task-visual-decline", user_goal="补充视觉证据")
+    result = VisualAgent(
+        LlmAgentClient(
+            FakeGPT(DecliningVisualClient([])),
+            JsonlTraceStore(tmp_path / "trace.jsonl"),
+        )
+    ).run(state, ToolRegistry())
+
+    assert result.ok is True
+    assert state.visual_decided is True
+    assert state.visual_requested is False
+    assert state.visual_plan == []
+
+
+def test_visual_agent_does_not_receive_side_effect_tool_in_deferred_runtime(tmp_path):
+    from app.agents.llm_agents import SupervisorAgent
+
+    captured = []
+
+    class DeferredContext:
+        defer_screenshots = True
+
+    class CapturingSupervisorClient(ScriptedClient):
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            tools = kwargs.get("tools", [])
+            captured.append({item["function"]["name"] for item in tools})
+            if tools and tools[0]["function"]["name"] == "submit_action":
+                if len(self.calls) == 1:
+                    return _response(_action("delegate", agent="visual"))
+                return _response(_action("degrade", reason="stop"))
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                tool_calls=[],
+                content='{"requested":false,"summary":"无需视觉证据","plans":[]}',
+            ))])
+
+    state = AgentState(
+        task_id="task-visual-deferred",
+        user_goal="补充视觉证据",
+        runtime_context=DeferredContext(),
+    )
+    registry = ToolRegistry()
+    registry.register(
+        "get_video_info",
+        "read video metadata",
+        {"type": "object"},
+        lambda _args, _state: Observation(ok=True, summary="metadata ready"),
+    )
+    final_state = SupervisorAgent(
+        FakeGPT(CapturingSupervisorClient([])),
+        JsonlTraceStore(tmp_path / "trace.jsonl"),
+    ).run(state, registry)
+
+    assert final_state.final_status == "degraded"
+    assert {"get_video_info"} in captured
+    assert all("enhance_visuals" not in names for names in captured)
+
+
+def test_supervisor_rejects_direct_deferred_visual_tool_request(tmp_path):
+    class DeferredContext:
+        defer_screenshots = True
+
+    client = ScriptedClient([_action("call_tool", tool="enhance_visuals")])
+    state = AgentState(
+        task_id="task-direct-visual-deferred",
+        user_goal="生成笔记",
+        runtime_context=DeferredContext(),
+    )
+    registry = ToolRegistry()
+    registry.register(
+        "enhance_visuals",
+        "enhance visuals",
+        {"type": "object"},
+        lambda _args, _state: (_ for _ in ()).throw(
+            AssertionError("deferred visual tool must not execute")
+        ),
+    )
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
+    ).run(state, registry)
+
+    assert final_state.final_status == "degraded"
+    assert final_state.decisions == 1
+    assert any("visual_deferred" in item for item in final_state.diagnostics)
+
+
+def test_visual_agent_rejects_deferred_side_effect_call_without_executing_it(tmp_path):
+    class DeferredContext:
+        defer_screenshots = True
+
+    class OffPolicyVisualClient(ScriptedClient):
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                tool_calls=[_tool_call("{}", name="enhance_visuals")],
+                content=None,
+            ))])
+
+    client = OffPolicyVisualClient([])
+    state = AgentState(
+        task_id="task-visual-off-policy",
+        user_goal="补充视觉证据",
+        runtime_context=DeferredContext(),
+    )
+    registry = ToolRegistry()
+    registry.register(
+        "enhance_visuals",
+        "enhance visuals",
+        {"type": "object"},
+        lambda _args, _state: (_ for _ in ()).throw(
+            AssertionError("deferred visual tool must not execute")
+        ),
+    )
+
+    result = __import__("app.agents.llm_agents", fromlist=["VisualAgent"]).VisualAgent(
+        LlmAgentClient(FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl"))
+    ).run(state, registry.scoped(("get_video_info",)))
+
+    assert result.ok is False
+    assert result.error_type == "visual_deferred"
+    assert len(client.calls) == 1
+
+
+def test_supervisor_state_view_exposes_visual_plan_to_next_decision():
+    from app.agents.llm_agents import _state_view
+
+    state = AgentState(task_id="task-visual-view")
+    state.visual_plan = [{"title": "结果", "start": 10, "end": 20}]
+
+    assert _state_view(state)["visual_plan"] == state.visual_plan
 
 
 def test_visual_agent_allows_initial_attempt_and_two_retries_only(tmp_path):
@@ -406,3 +640,99 @@ def test_review_issue_rejects_wrong_revision_agent(tmp_path):
 
     assert final_state.final_status == "degraded"
     assert any("invalid_action" in item for item in final_state.diagnostics)
+
+
+def test_review_visual_issue_routes_bounded_revision_to_visual_agent(tmp_path):
+    class DeferredContext:
+        defer_screenshots = True
+
+    client = ScriptedClient([
+        _action("delegate", agent="content"),
+        {"markdown": "# draft"},
+        _action("review"),
+        {"passed": False, "issues": [{"category": "visual", "message": "missing result evidence"}]},
+        _action("revise"),
+        {"requested": True, "summary": "重新规划结果证据", "plans": [{
+            "title": "结果", "start": 10, "end": 20,
+            "reason": "补足最终输出证据", "evidence_type": "result",
+        }]},
+        _action("review"),
+        {"passed": True, "issues": []},
+        _action("finish"),
+    ])
+    state = AgentState(
+        task_id="task-visual-revision",
+        user_goal="生成笔记",
+        runtime_context=DeferredContext(),
+    )
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
+    ).run(state, ToolRegistry())
+
+    assert final_state.final_status == "completed"
+    assert final_state.visual_retries == 1
+    assert final_state.visual_plan[0]["evidence_type"] == "result"
+
+
+def test_non_deferred_visual_revision_preserves_retry_budget(tmp_path):
+    class RuntimeContext:
+        defer_screenshots = False
+
+    class VisualRevisionClient(ScriptedClient):
+        def __init__(self):
+            super().__init__([])
+            self.step = 0
+            self.visual_calls = 0
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            self.step += 1
+            tools = kwargs.get("tools", [])
+            if tools and tools[0]["function"]["name"] == "submit_action" and self.step == 1:
+                return _response(_action("revise"))
+            if tools and tools[0]["function"]["name"] != "submit_action":
+                self.visual_calls += 1
+                if self.visual_calls > 1:
+                    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                        tool_calls=[],
+                        content='{"requested":true,"summary":"重新规划","plans":[]}',
+                    ))])
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                    tool_calls=[_tool_call("{}", name="enhance_visuals")],
+                    content=None,
+                ))])
+            if tools and tools[0]["function"]["name"] == "submit_action":
+                return _response(_action("finish"))
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                tool_calls=[],
+                content='{"requested":true,"summary":"重新规划","plans":[]}',
+            ))])
+
+    client = VisualRevisionClient()
+    state = AgentState(
+        task_id="task-visual-revision-budget",
+        user_goal="生成笔记",
+        runtime_context=RuntimeContext(),
+        review={"issues": [{"category": "visual", "message": "需要重做"}]},
+    )
+    state.budget.max_visual_retries = 2
+    state.visual_attempts = 1
+    state.visual_retries = 0
+    registry = ToolRegistry()
+    registry.register(
+        "enhance_visuals",
+        "enhance visuals",
+        {"type": "object"},
+        lambda _args, _state: Observation(ok=True, summary="visual ready"),
+    )
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
+    ).run(
+        state,
+        registry,
+    )
+
+    assert final_state.visual_attempts == 2
+    assert final_state.visual_retries == 1

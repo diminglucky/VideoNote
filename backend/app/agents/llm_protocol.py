@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 ActionName = Literal[
@@ -65,12 +65,30 @@ class ContentResult(BaseModel):
     summary: str = ""
 
 
+class VisualPlanItem(BaseModel):
+    """A safe, model-authored request for visual evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    reason: str = Field(default="", max_length=500)
+    evidence_type: Literal["code", "result", "diagram", "ui", "other"] = "other"
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "VisualPlanItem":
+        if self.end < self.start:
+            raise ValueError("visual plan end must be greater than or equal to start")
+        return self
+
+
 class VisualResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requested: bool = False
     summary: str = ""
-
+    plans: list[VisualPlanItem] = Field(default_factory=list, max_length=12)
 
 class AgentBudget(BaseModel):
     max_decisions: int = Field(default=12, ge=1)
@@ -96,7 +114,11 @@ class AgentState(BaseModel):
     transcript_summary: str = ""
     markdown: str = ""
     visual_requested: bool = False
+    # Distinguishes an explicit VisualAgent decision from the user's initial
+    # screenshot preference.  None is kept for the legacy fallback path.
+    visual_decided: bool = False
     visual_summary: dict[str, Any] = Field(default_factory=dict)
+    visual_plan: list[dict[str, Any]] = Field(default_factory=list)
     review: dict[str, Any] = Field(default_factory=dict)
     artifacts: dict[str, Any] = Field(default_factory=dict)
     diagnostics: list[str] = Field(default_factory=list)
