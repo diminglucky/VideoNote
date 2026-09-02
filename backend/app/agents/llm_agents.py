@@ -433,6 +433,20 @@ class SupervisorAgent:
         if reason == "decision_budget_exhausted_or_invalid_action":
             state.diagnostics.append(reason)
 
+    @staticmethod
+    def _finish_gate(state: AgentState) -> str | None:
+        if not state.media_summary and getattr(state.runtime_context, "audio_meta", None) is None:
+            return "media is not prepared"
+        if not state.transcript_summary.strip() and getattr(state.runtime_context, "transcript", None) is None:
+            return "transcript is not ready"
+        if not state.markdown.strip():
+            return "markdown artifact is empty"
+        if state.review.get("passed") is not True:
+            return "ReviewerAgent has not approved the note"
+        if state.visual_requested and not state.visual_decided:
+            return "VisualAgent has not decided screenshot evidence"
+        return None
+
     def _execute(self, action: AgentAction, state: AgentState, registry: ToolRegistry) -> Observation:
         if action.action == "call_tool":
             if not action.tool:
@@ -495,10 +509,19 @@ class SupervisorAgent:
                 return self.visual.run(state, registry.scoped(allowed_tools))
             return Observation(ok=False, summary="Revision agent does not match review issues", error_type="invalid_action")
         if action.action == "degrade":
+            if not state.markdown.strip():
+                return Observation(
+                    ok=False,
+                    summary="Cannot degrade without an existing Markdown artifact",
+                    error_type="invalid_action",
+                )
             state.final_status = "degraded"
             state.finished = True
             return Observation(ok=True, summary=action.reason, data={"status": "degraded"})
         if action.action == "finish":
+            gate_error = self._finish_gate(state)
+            if gate_error:
+                return Observation(ok=False, summary=gate_error, error_type="invalid_action")
             state.final_status = "completed"
             state.finished = True
             return Observation(ok=True, summary=action.reason, data={"status": "completed"})

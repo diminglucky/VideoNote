@@ -43,7 +43,7 @@ ContentAgent VisualAgent ReviewerAgent
 
 ## Control loop
 
-任务开始时 Supervisor 获得用户目标和已有缓存摘要。它可以先查询视频信息或缓存转录；当字幕不存在、不完整或 Reviewer 明确指出来源不足时，Supervisor 可以选择字幕工具、音频转写工具或指定区间检索。获得足够材料后，Supervisor 委派 ContentAgent 生成草稿。草稿交给 ReviewerAgent 评审；内容缺陷最多触发两次 ContentAgent 返工。若用户请求截图或 Reviewer 判断章节需要视觉证据，Supervisor 委派 VisualAgent；视觉证据不足时最多重试两次，只有 VisualAgent 明确返回可用但不完整的降级结果时才保留无截图笔记。模型、工具、协议或预算错误直接结束为失败状态。
+任务开始时 Supervisor 获得用户目标和已有缓存摘要。它可以先查询视频信息或缓存转录；当字幕不存在、不完整或 Reviewer 明确指出来源不足时，Supervisor 可以选择字幕工具、音频转写工具或指定区间检索。获得足够材料后，Supervisor 委派 ContentAgent 生成草稿。草稿交给 ReviewerAgent 评审；内容缺陷最多触发两次 ContentAgent 返工。若用户请求截图或 Reviewer 判断章节需要视觉证据，Supervisor 委派 VisualAgent；视觉证据不足时最多重试两次，只有 VisualAgent 明确返回可用但不完整的降级结果时才保留无截图笔记。Supervisor 的 `finish` 必须通过确定性完成门禁：媒体已准备、转录可用、Markdown 非空、Reviewer 已通过；请求截图时还必须存在 VisualAgent 的明确决策。空 Markdown 不允许通过 `degrade` 结束。模型、工具、协议或预算错误直接结束为失败状态。
 
 首版硬限制为 Supervisor 最多 12 次决策、ContentAgent 最多 2 次返工、VisualAgent 每个任务最多 2 次重试，并设置工具调用超时和允许工具白名单。达到限制时系统必须停止并返回失败状态与诊断信息，不得无限循环；只有模型显式选择 `degrade` 且已有有效笔记时才返回降级结果。
 

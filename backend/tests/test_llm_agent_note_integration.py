@@ -198,7 +198,7 @@ def test_enabled_runtime_returns_visual_plan_for_persistence(tmp_path, monkeypat
     ]
 
 
-def test_enabled_runtime_keeps_legacy_visual_fallback_when_visual_agent_is_not_delegated(tmp_path, monkeypatch):
+def test_enabled_runtime_rejects_screenshot_finish_without_visual_agent_decision(tmp_path, monkeypatch):
     monkeypatch.setenv("BILINOTE_LLM_AGENT_ENABLED", "true")
     context = _runtime_context(tmp_path)
     context.wants_screenshot = True
@@ -207,12 +207,13 @@ def test_enabled_runtime_keeps_legacy_visual_fallback_when_visual_agent_is_not_d
     context.gpt = gpt
     runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
 
-    result = LlmNoteOrchestrator(
-        trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
-    ).run(replace(_request(), wants_screenshot=True), runtime, context)
+    import pytest
 
-    assert result.visual_plan is None
-    assert context.visual_plan is None
+    with pytest.raises(RuntimeError, match="VisualAgent has not decided screenshot evidence"):
+        LlmNoteOrchestrator(
+            trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")
+        ).run(replace(_request(), wants_screenshot=True), runtime, context)
+
 
 
 def test_enabled_runtime_persists_empty_visual_plan_when_visual_agent_declines(tmp_path, monkeypatch):

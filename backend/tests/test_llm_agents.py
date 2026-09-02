@@ -6,7 +6,7 @@ from app.agents.agent_trace import JsonlTraceStore
 from app.agents.llm_agents import ContentAgent, LlmAgentClient, SupervisorAgent
 from pydantic import ValidationError
 
-from app.agents.llm_protocol import AgentState, Observation, ToolRegistry, VisualResult
+from app.agents.llm_protocol import AgentAction, AgentState, Observation, ToolRegistry, VisualResult
 
 
 def _tool_call(arguments, name="submit_action"):
@@ -76,7 +76,11 @@ def test_supervisor_switches_from_failed_subtitles_to_transcription(tmp_path):
         {"type": "object"},
         lambda _args, state: Observation(ok=True, summary="transcript ready", data={"transcript": "ready"}),
     )
-    state = AgentState(task_id="task-1", user_goal="生成视频笔记")
+    state = AgentState(
+        task_id="task-1",
+        user_goal="生成视频笔记",
+        media_summary={"title": "video"},
+    )
 
     final_state = SupervisorAgent(
         FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
@@ -91,7 +95,14 @@ def test_supervisor_switches_from_failed_subtitles_to_transcription(tmp_path):
 def test_supervisor_records_terminal_state_for_observability(tmp_path):
     trace_path = tmp_path / "trace.jsonl"
     client = ScriptedClient([_action("finish", reason="done")])
-    state = AgentState(task_id="task-terminal-trace", user_goal="生成笔记")
+    state = AgentState(
+        task_id="task-terminal-trace",
+        user_goal="生成笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+        markdown="# note",
+        review={"passed": True, "issues": []},
+    )
 
     final_state = SupervisorAgent(
         FakeGPT(client), JsonlTraceStore(trace_path)
@@ -107,6 +118,92 @@ def test_supervisor_records_terminal_state_for_observability(tmp_path):
     assert terminal["status"] == "completed"
     assert terminal["decisions"] == 1
     assert terminal["task_id"] == "task-terminal-trace"
+
+
+def test_finish_requires_generation_artifacts(tmp_path):
+    state = AgentState(task_id="task-finish-artifacts", user_goal="生成笔记")
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(action="finish", reason="done", expected="result"),
+        state,
+        ToolRegistry(),
+    )
+
+    assert observation.ok is False
+    assert observation.error_type == "invalid_action"
+    assert state.final_status == "running"
+    assert state.finished is False
+
+
+def test_finish_requires_passing_review(tmp_path):
+    state = AgentState(
+        task_id="task-finish-review",
+        user_goal="生成笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+        markdown="# note",
+        review={"passed": False, "issues": [{"category": "content", "message": "missing steps"}]},
+    )
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(action="finish", reason="done", expected="result"),
+        state,
+        ToolRegistry(),
+    )
+
+    assert observation.ok is False
+    assert observation.error_type == "invalid_action"
+    assert state.final_status == "running"
+
+
+def test_finish_requires_visual_decision_when_screenshots_requested(tmp_path):
+    state = AgentState(
+        task_id="task-finish-visual",
+        user_goal="生成带截图的笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+        markdown="# note",
+        review={"passed": True, "issues": []},
+        visual_requested=True,
+        visual_decided=False,
+    )
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(action="finish", reason="done", expected="result"),
+        state,
+        ToolRegistry(),
+    )
+
+    assert observation.ok is False
+    assert observation.error_type == "invalid_action"
+    assert state.final_status == "running"
+
+
+def test_degrade_requires_existing_markdown(tmp_path):
+    state = AgentState(task_id="task-degrade-empty", user_goal="生成笔记")
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(action="degrade", reason="best effort", expected="note"),
+        state,
+        ToolRegistry(),
+    )
+
+    assert observation.ok is False
+    assert observation.error_type == "invalid_action"
+    assert state.final_status == "running"
+    assert state.finished is False
 
 
 def test_content_revision_is_limited_and_review_issues_are_structured(tmp_path):
@@ -555,6 +652,7 @@ def test_visual_agent_does_not_receive_side_effect_tool_in_deferred_runtime(tmp_
         task_id="task-visual-deferred",
         user_goal="补充视觉证据",
         runtime_context=DeferredContext(),
+        markdown="# existing note",
     )
     registry = ToolRegistry()
     registry.register(
@@ -702,7 +800,12 @@ def test_review_issue_routes_content_revision_to_content_agent(tmp_path):
         {"passed": True, "issues": []},
         _action("finish"),
     ])
-    state = AgentState(task_id="task-routing", user_goal="生成笔记")
+    state = AgentState(
+        task_id="task-routing",
+        user_goal="生成笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+    )
 
     final_state = SupervisorAgent(
         FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
@@ -752,6 +855,8 @@ def test_review_visual_issue_routes_bounded_revision_to_visual_agent(tmp_path):
         task_id="task-visual-revision",
         user_goal="生成笔记",
         runtime_context=DeferredContext(),
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
     )
 
     final_state = SupervisorAgent(

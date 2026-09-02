@@ -14,6 +14,7 @@
 - Keep existing deterministic media and visual services as tools; do not expose shell execution or arbitrary file paths to the LLM.
 - Enable the new runtime by default; only explicit `BILINOTE_LLM_AGENT_ENABLED=false` selects the existing fixed executor compatibility mode.
 - When the Agent runtime is enabled, model/tool/protocol failures mark the task failed and never invoke the deterministic executor as an automatic fallback.
+- Supervisor `finish` requires prepared media, a usable transcript, non-empty Markdown, a passing Reviewer result, and an explicit VisualAgent decision when screenshots are requested; empty `degrade` actions are rejected.
 - Limit Supervisor decisions to 12, Content revisions to 2, and Visual retries to 2 per task.
 - Every model decision and tool result must be schema-validated and recorded without API keys, full prompts, or full transcripts.
 - Preserve `generation_token`, `enhance_token`, local cache filenames, status files, and `PARTIAL_SUCCESS` behavior.
