@@ -125,6 +125,74 @@ def test_projector_keeps_safe_error_type_for_failed_events(tmp_path):
     assert result["events"][0]["error_type"] == "budget_exhausted"
 
 
+def test_projector_keeps_safe_runtime_tool_error_types(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "kind": "observation",
+                    "generation_id": "current",
+                    "agent": "supervisor",
+                    "ok": False,
+                    "error_type": error_type,
+                    "summary": error_type,
+                }
+            )
+            for error_type in (
+                "media_unavailable",
+                "precondition_missing",
+                "empty_artifact",
+                "visual_unavailable",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = project_agent_run(path, "current")
+
+    assert [event["error_type"] for event in result["events"]] == [
+        "media_unavailable",
+        "precondition_missing",
+        "empty_artifact",
+        "visual_unavailable",
+    ]
+
+
+def test_projector_exposes_failed_agent_run_status(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "kind": "observation",
+                        "generation_id": "current",
+                        "agent": "supervisor",
+                        "ok": False,
+                        "error_type": "runtime_error",
+                        "summary": "provider unavailable",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "kind": "final_state",
+                        "generation_id": "current",
+                        "status": "failed",
+                        "diagnostics": ["runtime_error: provider unavailable"],
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = project_agent_run(path, "current")
+
+    assert result["status"] == "failed"
+    assert result["events"][0]["error_type"] == "runtime_error"
+
+
 def test_projector_drops_unknown_identifiers_that_could_contain_paths(tmp_path):
     path = tmp_path / "trace.jsonl"
     path.write_text(

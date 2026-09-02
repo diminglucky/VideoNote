@@ -12,7 +12,8 @@
 
 - Keep the existing `NoteGenerator.generate()` signature and `NoteResult | None` behavior.
 - Keep existing deterministic media and visual services as tools; do not expose shell execution or arbitrary file paths to the LLM.
-- Enable the new runtime only when `BILINOTE_LLM_AGENT_ENABLED=true`; the existing fixed executor remains the fallback.
+- Enable the new runtime by default; only explicit `BILINOTE_LLM_AGENT_ENABLED=false` selects the existing fixed executor compatibility mode.
+- When the Agent runtime is enabled, model/tool/protocol failures mark the task failed and never invoke the deterministic executor as an automatic fallback.
 - Limit Supervisor decisions to 12, Content revisions to 2, and Visual retries to 2 per task.
 - Every model decision and tool result must be schema-validated and recorded without API keys, full prompts, or full transcripts.
 - Preserve `generation_token`, `enhance_token`, local cache filenames, status files, and `PARTIAL_SUCCESS` behavior.
@@ -228,7 +229,7 @@ Run: `cd backend; pytest tests/test_note_agent_tools.py tests/test_note_agents.p
 
 Expected: all adapter and existing planner/Agent tests pass.
 
-### Task 4: Connect the opt-in runtime to the product API and verify rollout boundaries
+### Task 4: Connect the default Agent runtime to the product API and verify rollout boundaries
 
 **Files:**
 - Modify: `backend/app/services/note.py`
@@ -274,9 +275,9 @@ Run: `cd backend; pytest tests/test_llm_agent_note_integration.py -q`
 
 Expected: failure because the feature flag and product orchestrator seam are not implemented.
 
-- [ ] **Step 3: Wire the opt-in path and fallback**
+- [ ] **Step 3: Wire the default Agent path and explicit compatibility mode**
 
-Create the agent runtime after `NoteRuntimeFactory.create(request)` so it receives the same configured model and deterministic services. Initialize the trace file at `<NOTE_OUTPUT_DIR>/<task_id>.agent-trace.jsonl`. Run the Supervisor loop, then convert `AgentState` back to `NoteResult`; if the loop returns no valid Markdown or raises a model/client exception, log the reason and invoke the existing `PlanExecutor` path for that request. Keep all status and result writes in their existing router/lifecycle locations. Add `BILINOTE_LLM_AGENT_ENABLED=false` and the three budget variables to `.env.example`.
+Create the agent runtime after `NoteRuntimeFactory.create(request)` so it receives the same configured model and deterministic services. Initialize the trace file at `<NOTE_OUTPUT_DIR>/<task_id>.agent-trace.jsonl`. Run the Supervisor loop, then convert `AgentState` back to `NoteResult`; if the loop returns no valid Markdown or raises a model/client exception, allow the exception to reach the existing `TaskLifecycleService.handle_exception()` boundary so the task is marked failed. Invoke the deterministic `PlanExecutor` only when `BILINOTE_LLM_AGENT_ENABLED=false` was explicitly selected. Keep all status and result writes in their existing router/lifecycle locations. Add `BILINOTE_LLM_AGENT_ENABLED=true` and the three budget variables to `.env.example`.
 
 - [ ] **Step 4: Run focused integration and backend regression tests**
 

@@ -1061,6 +1061,7 @@ class TestNoteAgents(unittest.TestCase):
             output_dir = pathlib.Path(tmp_dir)
             with (
                 patch("app.services.note.NOTE_OUTPUT_DIR", output_dir),
+                patch("app.services.note.is_llm_agent_enabled", return_value=False),
             ):
                 note = generator.generate(
                     video_url="https://example.com/video",
@@ -1087,6 +1088,80 @@ class TestNoteAgents(unittest.TestCase):
 
         with patch.object(video_quality, "probe_video_size", return_value=(1920, 1080)):
             self.assertTrue(video_quality.is_screenshot_ready_video(pathlib.Path("cached-1080p.mp4")))
+
+    def test_enabled_agent_failure_does_not_fallback_to_deterministic_executor(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        lifecycle_failures = []
+        executor_calls = []
+
+        class _Lifecycle:
+            def mark_parsing(self, _task_id):
+                return None
+
+            def mark_saving(self, _task_id):
+                return None
+
+            def mark_success(self, _task_id):
+                return None
+
+            def handle_exception(self, task_id, exc):
+                lifecycle_failures.append((task_id, exc))
+
+        class _FailingGPT:
+            model = "failing-model"
+
+            @staticmethod
+            def _create(**_kwargs):
+                raise RuntimeError("provider unavailable")
+
+            client = SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=_create))
+            )
+
+        class _Executor:
+            def run(self, *_args):
+                executor_calls.append(1)
+                raise AssertionError("enabled Agent failure must not invoke legacy executor")
+
+        class _RuntimeFactory:
+            def create(self, _request):
+                return NoteRuntime(
+                    transcriber=object(),
+                    downloader=object(),
+                    gpt=_FailingGPT(),
+                    executor=_Executor(),
+                )
+
+        class _ResultStore:
+            def save_metadata(self, **_kwargs):
+                raise AssertionError("failed Agent run must not save note metadata")
+
+        generator = NoteGenerator(
+            generation_token="generation-1",
+            lifecycle=_Lifecycle(),
+            runtime_factory=_RuntimeFactory(),
+            result_store=_ResultStore(),
+        )
+
+        with ProjectTempDir() as tmp_dir, patch("app.services.note.NOTE_OUTPUT_DIR", pathlib.Path(tmp_dir)), patch(
+            "app.services.note.is_llm_agent_enabled", return_value=True
+        ):
+            result = generator.generate(
+                video_url="https://example.com/video",
+                platform="bilibili",
+                quality="medium",
+                task_id="task-agent-failure",
+                model_name="model",
+                provider_id="provider",
+                defer_screenshots=True,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(executor_calls, [])
+        self.assertEqual(len(lifecycle_failures), 1)
+        self.assertIn("provider unavailable", str(lifecycle_failures[0][1]))
 
     def test_cached_video_probe_failure_is_not_screenshot_ready(self):
         from app.utils import video_quality

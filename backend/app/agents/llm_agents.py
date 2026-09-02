@@ -371,7 +371,7 @@ class SupervisorAgent:
                     action = AgentAction.model_validate(_message_json(message))
                 except (ValueError, ValidationError, TypeError) as exc:
                     self._diagnose(state, "invalid_action", str(exc))
-                    self._terminate_degraded(state, "invalid_action")
+                    self._terminate_failed(state, "invalid_action")
                     break
 
                 self.trace_store.append({"kind": "decision", "task_id": state.task_id, **action.model_dump()})
@@ -394,14 +394,24 @@ class SupervisorAgent:
                         "unknown_tool",
                         "invalid_arguments",
                         "invalid_agent_output",
+                        "handler_error",
+                        "media_unavailable",
+                        "precondition_missing",
+                        "empty_artifact",
+                        "visual_unavailable",
                         "budget_exhausted",
                         "visual_deferred",
                     }:
-                        self._terminate_degraded(state, observation.error_type)
+                        self._terminate_failed(state, observation.error_type)
                         break
 
             if not state.finished:
-                self._terminate_degraded(state, "decision_budget_exhausted_or_invalid_action")
+                self._terminate_failed(state, "decision_budget_exhausted_or_invalid_action")
+        except Exception as exc:
+            state.finished = True
+            state.final_status = "failed"
+            self._diagnose(state, "runtime_error", str(exc))
+            raise
         finally:
             self.trace_store.append({
                 "kind": "final_state",
@@ -417,8 +427,8 @@ class SupervisorAgent:
         return state
 
     @staticmethod
-    def _terminate_degraded(state: AgentState, reason: str) -> None:
-        state.final_status = "degraded"
+    def _terminate_failed(state: AgentState, reason: str) -> None:
+        state.final_status = "failed"
         state.finished = True
         if reason == "decision_budget_exhausted_or_invalid_action":
             state.diagnostics.append(reason)
@@ -517,6 +527,9 @@ class LlmNoteOrchestrator:
         state.budget.max_visual_retries = self._env_int("BILINOTE_AGENT_MAX_VISUAL_RETRIES", 2, 0)
         registry = build_note_agent_registry(runtime, request, state, self.trace_store)
         final_state = SupervisorAgent(runtime.gpt, self.trace_store).run(state, registry)
+        if final_state.final_status == "failed":
+            detail = "; ".join(final_state.diagnostics[-3:]) or "LLM Agent runtime failed"
+            raise RuntimeError(detail)
         if not final_state.markdown:
             raise RuntimeError("LLM Agent runtime completed without a Markdown artifact")
         runtime_context.markdown = final_state.markdown

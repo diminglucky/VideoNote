@@ -23,6 +23,7 @@ const statusLabels: Record<string, string> = {
   running: '运行中',
   completed: '已完成',
   degraded: '已降级',
+  failed: '失败',
   unknown: '状态未知',
 }
 
@@ -67,6 +68,8 @@ const AgentRunTimeline = ({ agentRun }: AgentRunTimelineProps) => {
   const statusClass =
     agentRun.status === 'degraded'
       ? 'text-amber-700'
+      : agentRun.status === 'failed'
+        ? 'text-red-700'
       : agentRun.status === 'completed'
         ? 'text-emerald-700'
         : agentRun.status === 'running'

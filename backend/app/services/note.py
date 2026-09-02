@@ -33,7 +33,7 @@ logger.setLevel(logging.INFO)
 
 
 def is_llm_agent_enabled() -> bool:
-    return os.getenv("BILINOTE_LLM_AGENT_ENABLED", "false").strip().lower() in {
+    return os.getenv("BILINOTE_LLM_AGENT_ENABLED", "true").strip().lower() in {
         "1", "true", "yes", "on"
     }
 
@@ -199,22 +199,12 @@ class NoteGenerator:
                     {"generation_id": generation_id_for_token(request.generation_token)},
                 )
                 logger.info("启用 LLM Multi-Agent runtime (task_id=%s)", request.task_id)
-                try:
-                    note = LlmNoteOrchestrator(trace_store).run(
-                        request, runtime, runtime_context
-                    )
-                    runtime_context.markdown = note.markdown
-                    runtime_context.transcript = note.transcript
-                    runtime_context.audio_meta = note.audio_meta
-                except Exception as agent_exc:
-                    logger.warning(
-                        "LLM Agent runtime failed; fallback to deterministic executor "
-                        "(task_id=%s): %s",
-                        request.task_id,
-                        agent_exc,
-                    )
-                    _reset_llm_visual_decision_for_fallback(runtime_context)
-                    runtime_context = runtime.executor.run(execution_plan, runtime_context)
+                note = LlmNoteOrchestrator(trace_store).run(
+                    request, runtime, runtime_context
+                )
+                runtime_context.markdown = note.markdown
+                runtime_context.transcript = note.transcript
+                runtime_context.audio_meta = note.audio_meta
             else:
                 runtime_context = runtime.executor.run(execution_plan, runtime_context)
             markdown = prepend_source_link(runtime_context.markdown or "", request.video_url)

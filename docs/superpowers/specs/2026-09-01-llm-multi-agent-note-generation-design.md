@@ -43,13 +43,13 @@ ContentAgent VisualAgent ReviewerAgent
 
 ## Control loop
 
-任务开始时 Supervisor 获得用户目标和已有缓存摘要。它可以先查询视频信息或缓存转录；当字幕不存在、不完整或 Reviewer 明确指出来源不足时，Supervisor 可以选择字幕工具、音频转写工具或指定区间检索。获得足够材料后，Supervisor 委派 ContentAgent 生成草稿。草稿交给 ReviewerAgent 评审；内容缺陷最多触发两次 ContentAgent 返工。若用户请求截图或 Reviewer 判断章节需要视觉证据，Supervisor 委派 VisualAgent；视觉失败最多重试两次，之后保留无截图的有效笔记并记录降级原因。最终 Reviewer 通过，或达到安全预算后由 Supervisor 输出最终结果。
+任务开始时 Supervisor 获得用户目标和已有缓存摘要。它可以先查询视频信息或缓存转录；当字幕不存在、不完整或 Reviewer 明确指出来源不足时，Supervisor 可以选择字幕工具、音频转写工具或指定区间检索。获得足够材料后，Supervisor 委派 ContentAgent 生成草稿。草稿交给 ReviewerAgent 评审；内容缺陷最多触发两次 ContentAgent 返工。若用户请求截图或 Reviewer 判断章节需要视觉证据，Supervisor 委派 VisualAgent；视觉证据不足时最多重试两次，只有 VisualAgent 明确返回可用但不完整的降级结果时才保留无截图笔记。模型、工具、协议或预算错误直接结束为失败状态。
 
-首版硬限制为 Supervisor 最多 12 次决策、ContentAgent 最多 2 次返工、VisualAgent 每个任务最多 2 次重试，并设置工具调用超时和允许工具白名单。达到限制时系统必须返回已有的最佳有效笔记、明确的降级状态和诊断信息，不得无限循环。
+首版硬限制为 Supervisor 最多 12 次决策、ContentAgent 最多 2 次返工、VisualAgent 每个任务最多 2 次重试，并设置工具调用超时和允许工具白名单。达到限制时系统必须停止并返回失败状态与诊断信息，不得无限循环；只有模型显式选择 `degrade` 且已有有效笔记时才返回降级结果。
 
 ## Integration and compatibility
 
-现有 FastAPI 入口、任务轮询响应、`generation_token`、`enhance_token`、本地缓存路径和 `PARTIAL_SUCCESS` 语义保持兼容。Agent Runtime 通过依赖注入复用现有 downloader、transcriber、GPT、视觉增强服务和结果存储。旧固定执行器在迁移期间保留为 fallback；只有显式启用 Agent Runtime 且能力配置满足条件时才走 LLM 闭环，模型调用失败可降级到当前确定性流程，不能阻塞普通笔记生成。
+现有 FastAPI 入口、任务轮询响应、`generation_token`、`enhance_token`、本地缓存路径和 `PARTIAL_SUCCESS` 语义保持兼容。Agent Runtime 通过依赖注入复用现有 downloader、transcriber、GPT、视觉增强服务和结果存储。Agent Runtime 默认启用；显式设置 `BILINOTE_LLM_AGENT_ENABLED=false` 时才进入旧固定执行器兼容模式。启用 Agent 后，模型调用失败、工具异常、协议校验失败或预算耗尽直接标记任务失败，不自动回退到确定性流程，避免产品在无提示的情况下伪装成 Agent 成功。
 
 Agent Runtime 不允许让 LLM 直接控制并发、线程、任务状态文件或版本令牌。程序在写入结果前验证当前 `generation_token`，在视觉增强写入前验证 `enhance_token`，继续阻止旧运行覆盖新运行。
 
@@ -59,7 +59,7 @@ Agent Runtime 不允许让 LLM 直接控制并发、线程、任务状态文件�
 
 ## Testing and acceptance
 
-单元测试覆盖协议校验、工具白名单、预算限制、路由决策、Observation 记录和 token 隔离。Runtime 测试使用假的 GPT 响应序列验证真实闭环，而不是只断言某个函数被调用。集成测试验证字幕失败时选择转写、内容评审失败时返工、视觉质量不足时重试后降级，以及模型异常时 fallback 不破坏现有结果。现有后端 Agent、视觉和笔记生成回归测试必须继续通过；真实供应商调用和真实视频流程作为独立验收门，不用 mock 测试替代。
+单元测试覆盖协议校验、工具白名单、预算限制、路由决策、Observation 记录和 token 隔离。Runtime 测试使用假的 GPT 响应序列验证真实闭环，而不是只断言某个函数被调用。集成测试验证字幕失败时选择转写、内容评审失败时返工、视觉质量不足时重试后降级，以及模型异常时 fail-closed 并写入失败诊断。现有后端 Agent、视觉和笔记生成回归测试必须继续通过；真实供应商调用和真实视频流程作为独立验收门，不用 mock 测试替代。
 
 ## Explicit non-goals
 

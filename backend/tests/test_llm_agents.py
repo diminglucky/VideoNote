@@ -143,12 +143,76 @@ def test_unknown_model_action_becomes_observation_and_does_not_execute(tmp_path)
         FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
     ).run(state, ToolRegistry())
 
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert final_state.finished is True
     assert any("invalid_action" in item for item in final_state.diagnostics)
 
 
-def test_unknown_delegate_stops_in_degraded_state(tmp_path):
+def test_internal_unknown_action_is_returned_as_failed_observation(tmp_path):
+    state = AgentState(task_id="task-internal-unknown-action", user_goal="生成笔记")
+    action = __import__("app.agents.llm_protocol", fromlist=["AgentAction"]).AgentAction.model_construct(
+        action="not_a_real_action",
+        reason="defensive branch",
+        expected="failure",
+    )
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(action, state, ToolRegistry())
+
+    assert observation.ok is False
+    assert observation.error_type == "unknown_action"
+
+
+def test_protocol_failure_is_failed_even_when_a_draft_already_exists(tmp_path):
+    client = ScriptedClient([
+        _action("delegate", agent="content"),
+        {"markdown": "# draft"},
+        _action("not_a_real_action"),
+    ])
+    state = AgentState(task_id="task-draft-protocol-error", user_goal="生成笔记")
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
+    ).run(state, ToolRegistry())
+
+    assert final_state.markdown == "# draft"
+    assert final_state.final_status == "failed"
+    assert final_state.finished is True
+
+
+def test_unexpected_provider_error_marks_agent_run_failed_and_preserves_diagnostic(tmp_path):
+    class FailingClient:
+        def create(self, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+    state = AgentState(task_id="task-provider-error", user_goal="生成笔记")
+    trace_path = tmp_path / "trace.jsonl"
+    trace_store = JsonlTraceStore(trace_path)
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        SupervisorAgent(FakeGPT(FailingClient()), trace_store).run(
+            state, ToolRegistry()
+        )
+
+    assert state.finished is True
+    assert state.final_status == "failed"
+    assert any("provider unavailable" in item for item in state.diagnostics)
+    records = [
+        __import__("json").loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[-1]["kind"] == "final_state"
+    assert records[-1]["status"] == "failed"
+
+
+def test_unknown_delegate_stops_in_failed_state(tmp_path):
     client = ScriptedClient([_action("delegate", agent="research")])
     state = AgentState(task_id="task-unknown-agent", user_goal="生成笔记")
 
@@ -157,11 +221,11 @@ def test_unknown_delegate_stops_in_degraded_state(tmp_path):
     ).run(state, ToolRegistry())
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert any("unknown_agent" in item for item in final_state.diagnostics)
 
 
-def test_unknown_tool_stops_in_degraded_state(tmp_path):
+def test_unknown_tool_stops_in_failed_state(tmp_path):
     client = ScriptedClient([_action("call_tool", tool="not_registered")])
     state = AgentState(task_id="task-unknown-tool", user_goal="生成笔记")
     registry = ToolRegistry()
@@ -171,8 +235,32 @@ def test_unknown_tool_stops_in_degraded_state(tmp_path):
     ).run(state, registry)
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert any("unknown_tool" in item for item in final_state.diagnostics)
+
+
+def test_tool_handler_error_stops_without_allowing_supervisor_to_claim_success(tmp_path):
+    client = ScriptedClient([
+        _action("call_tool", tool="broken_tool"),
+        _action("finish", reason="incorrect recovery"),
+    ])
+    registry = ToolRegistry()
+    registry.register(
+        "broken_tool",
+        "broken tool",
+        {"type": "object"},
+        lambda _args, _state: (_ for _ in ()).throw(RuntimeError("tool crashed")),
+    )
+    state = AgentState(task_id="task-handler-error", user_goal="生成笔记")
+
+    final_state = SupervisorAgent(
+        FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
+    ).run(state, registry)
+
+    assert final_state.finished is True
+    assert final_state.final_status == "failed"
+    assert len(client.calls) == 1
+    assert any("handler_error" in item for item in final_state.diagnostics)
 
 
 def test_supervisor_stops_when_visual_retry_budget_is_exhausted(tmp_path):
@@ -198,7 +286,7 @@ def test_supervisor_stops_when_visual_retry_budget_is_exhausted(tmp_path):
     ).run(state, registry)
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert final_state.visual_attempts == 3
     assert len(client.calls) == 4
     assert any("budget_exhausted" in item for item in final_state.diagnostics)
@@ -213,7 +301,7 @@ def test_malformed_supervisor_action_stops_without_second_model_call(tmp_path):
     ).run(state, ToolRegistry())
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert len(client.calls) == 1
 
 
@@ -231,7 +319,7 @@ def test_non_submit_action_function_is_rejected(tmp_path):
     ).run(state, ToolRegistry())
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert len(client.calls) == 1
     assert any("invalid_action" in item for item in final_state.diagnostics)
 
@@ -248,7 +336,7 @@ def test_malformed_reviewer_output_is_a_bounded_degradation(tmp_path):
     ).run(state, ToolRegistry())
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert len(client.calls) == 2
     assert any("invalid_agent_output" in item for item in final_state.diagnostics)
 
@@ -265,7 +353,7 @@ def test_reviewer_rejects_non_boolean_passed_value(tmp_path):
     ).run(state, ToolRegistry())
 
     assert final_state.finished is True
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert any("invalid_agent_output" in item for item in final_state.diagnostics)
 
 
@@ -485,7 +573,7 @@ def test_visual_agent_does_not_receive_side_effect_tool_in_deferred_runtime(tmp_
     assert all("enhance_visuals" not in names for names in captured)
 
 
-def test_supervisor_rejects_direct_deferred_visual_tool_request(tmp_path):
+def test_supervisor_rejects_direct_deferred_visual_tool_request_as_failure(tmp_path):
     class DeferredContext:
         defer_screenshots = True
 
@@ -509,7 +597,7 @@ def test_supervisor_rejects_direct_deferred_visual_tool_request(tmp_path):
         FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
     ).run(state, registry)
 
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert final_state.decisions == 1
     assert any("visual_deferred" in item for item in final_state.diagnostics)
 
@@ -638,7 +726,7 @@ def test_review_issue_rejects_wrong_revision_agent(tmp_path):
         FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl")
     ).run(state, ToolRegistry())
 
-    assert final_state.final_status == "degraded"
+    assert final_state.final_status == "failed"
     assert any("invalid_action" in item for item in final_state.diagnostics)
 
 

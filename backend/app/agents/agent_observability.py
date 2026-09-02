@@ -37,6 +37,11 @@ _SAFE_TOOLS = {
     "enhance_visuals",
 }
 _SAFE_ERRORS = {
+    "runtime_error",
+    "media_unavailable",
+    "precondition_missing",
+    "empty_artifact",
+    "visual_unavailable",
     "unknown_tool",
     "invalid_arguments",
     "handler_error",
@@ -132,7 +137,7 @@ def project_agent_run(
     status = "unknown"
     if final_state is not None:
         raw_status = final_state.get("status")
-        if raw_status in {"completed", "degraded"}:
+        if raw_status in {"completed", "degraded", "failed"}:
             status = raw_status
     elif task_status in _ACTIVE_STATUSES:
         status = "running"
