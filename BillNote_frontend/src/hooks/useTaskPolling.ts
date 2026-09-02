@@ -44,6 +44,8 @@ export const useTaskPolling = (interval = 3000, enabled = true) => {
         const nextGenerationToken = res.generation_token || latestTask.generationToken
         if (res.result) {
           const { markdown, transcript, audio_meta, visual_report } = res.result
+          const agentRunChanged =
+            JSON.stringify(res.agent_run ?? null) !== JSON.stringify(latestTask.agentRun ?? null)
           if (isSuccessTaskStatus(status) && !isSuccessTaskStatus(latestTask.status)) {
             toast.success('笔记生成成功')
           }
@@ -60,7 +62,8 @@ export const useTaskPolling = (interval = 3000, enabled = true) => {
             message !== latestTask.message ||
             markdown !== latestMarkdown ||
             visualReportChanged ||
-            audioMetaChanged
+            audioMetaChanged ||
+            agentRunChanged
           ) {
             updateTaskContent(task.id, {
               status,
@@ -70,16 +73,20 @@ export const useTaskPolling = (interval = 3000, enabled = true) => {
               transcript,
               audioMeta: audio_meta,
               visualReport: visual_report,
+              agentRun: res.agent_run,
             })
           }
           return
         }
 
-        if (status !== latestTask.status || message !== latestTask.message) {
+        const agentRunChanged =
+          JSON.stringify(res.agent_run ?? null) !== JSON.stringify(latestTask.agentRun ?? null)
+        if (status !== latestTask.status || message !== latestTask.message || agentRunChanged) {
           updateTaskContent(task.id, {
             status,
             message,
             generationToken: nextGenerationToken,
+            agentRun: res.agent_run,
           })
           if (isFailedTaskStatus(status)) {
             console.warn(`任务 ${task.id} 失败`)

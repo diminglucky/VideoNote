@@ -7,11 +7,40 @@ export interface GenerateNoteResponse {
   generation_token: string
 }
 
+export interface AgentRunEvent {
+  id: string
+  timestamp?: string | null
+  kind: 'decision' | 'tool' | 'observation' | 'final' | string
+  agent?: string | null
+  action?: string | null
+  tool?: string | null
+  target_agent?: string | null
+  ok?: boolean | null
+  error_type?: string | null
+  summary?: string
+}
+
+export interface AgentRun {
+  mode: 'llm_multi_agent' | string
+  status: 'running' | 'completed' | 'degraded' | 'unknown' | string
+  active_agent?: string | null
+  counters: {
+    decisions: number
+    tool_calls: number
+    llm_calls: number
+    content_revisions: number
+    visual_retries: number
+  }
+  diagnostics: string[]
+  events: AgentRunEvent[]
+}
+
 export interface TaskStatusResponse {
   status: TaskStatus
   message?: string
   task_id: string
   generation_token?: string
+  agent_run?: AgentRun
   result?: {
     markdown?: string
     transcript?: any

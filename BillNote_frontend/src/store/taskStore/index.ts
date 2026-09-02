@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { get, set, del } from 'idb-keyval'
 import type { TaskStatus } from '@/models/taskStateMachine'
 import { resolveCoverUrl } from '@/utils/coverImage'
+import type { AgentRun } from '@/services/taskApi'
 
 
 export interface AudioMeta {
@@ -47,6 +48,7 @@ export interface Task {
   markdown: Markdown[]
   transcript: Transcript
   visualReport?: any
+  agentRun?: AgentRun
   status: TaskStatus
   message?: string
   audioMeta: AudioMeta
@@ -274,6 +276,7 @@ export const useTaskStore = create<TaskStore>()(
                     isRetrySubmitting: true,
                     message: '正在提交重新生成请求...',
                     visualReport: null,
+                    agentRun: undefined,
                   }
                   : t
           ),

@@ -26,6 +26,7 @@ import TranscriptViewer from '@/pages/HomePage/components/transcriptViewer.tsx'
 import MarkmapEditor from '@/pages/HomePage/components/MarkmapComponent.tsx'
 import ChatPanel from '@/pages/HomePage/components/ChatPanel.tsx'
 import VideoBanner from '@/pages/HomePage/components/VideoBanner.tsx'
+import AgentRunTimeline from '@/pages/HomePage/components/AgentRunTimeline.tsx'
 import {
   isRunningTaskStatus,
   taskStatusMessage,
@@ -760,6 +761,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
             </div>
           </div>
           <StepBar steps={taskSteps} currentStep={taskStatus} />
+          <AgentRunTimeline agentRun={currentTask?.agentRun} />
           <div className="mt-6 flex items-center gap-2 text-sm text-neutral-500">
             <Loading className="h-5 w-5" />
             <span>笔记正文会优先生成，关键截图随后异步补齐。</span>
@@ -865,6 +867,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
                         <StepBar steps={taskSteps} currentStep={progressStatus} compact />
                       </div>
                     )}
+                    <AgentRunTimeline agentRun={currentTask?.agentRun} />
                     {status === 'failed' && markdownVersions.length > 0 && (
                       <div className="sticky top-0 z-10 border-b border-red-200 bg-red-50/95 px-5 py-3 text-red-800 shadow-sm backdrop-blur">
                         <div className="flex items-start justify-between gap-3">

@@ -189,13 +189,18 @@ class NoteGenerator:
             )
 
             if is_llm_agent_enabled():
+                from app.agents.agent_observability import generation_id_for_token
                 from app.agents.agent_trace import JsonlTraceStore
                 from app.agents.llm_agents import LlmNoteOrchestrator
 
                 trace_path = NOTE_OUTPUT_DIR / f"{request.task_id}.agent-trace.jsonl"
+                trace_store = JsonlTraceStore(
+                    trace_path,
+                    {"generation_id": generation_id_for_token(request.generation_token)},
+                )
                 logger.info("启用 LLM Multi-Agent runtime (task_id=%s)", request.task_id)
                 try:
-                    note = LlmNoteOrchestrator(JsonlTraceStore(trace_path)).run(
+                    note = LlmNoteOrchestrator(trace_store).run(
                         request, runtime, runtime_context
                     )
                     runtime_context.markdown = note.markdown

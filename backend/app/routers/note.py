@@ -17,6 +17,7 @@ from app.exceptions.note import NoteError
 from app.services.note import NoteGenerator, logger
 from app.services.task_serial_executor import task_serial_executor
 from app.services.visual_enhancement_service import note_to_json_payload
+from app.agents.agent_observability import generation_id_for_token, project_agent_run
 from app.utils.response import ResponseWrapper as R
 from app.utils.url_parser import extract_video_id
 from app.utils.task_status_writer import write_status_record
@@ -583,50 +584,61 @@ def get_task_status(task_id: str, generation_token: Optional[str] = None):
     if not generation_token or _current_generation_token(task_id) == generation_token:
         _recover_result_from_cache(task_id, generation_token=generation_token)
 
+    def _with_agent_run(payload: dict, token: Optional[str], status_value: Optional[str]) -> dict:
+        effective_token = token or _current_generation_token(task_id)
+        agent_run = project_agent_run(
+            Path(NOTE_OUTPUT_DIR) / f"{task_id}.agent-trace.jsonl",
+            generation_id_for_token(effective_token),
+            task_status=status_value,
+        )
+        if agent_run is not None:
+            payload["agent_run"] = agent_run
+        return payload
+
     def _response_token(status_content: Optional[dict] = None) -> Optional[str]:
         if isinstance(status_content, dict):
             return status_content.get("generation_token") or generation_token
         return generation_token
 
     def _pending_for_generation(message: str = "等待当前重新生成任务写入结果"):
-        return R.success({
+        return R.success(_with_agent_run({
             "status": TaskStatus.PENDING.value,
             "message": message,
             "task_id": task_id,
             "generation_token": generation_token,
-        })
+        }, generation_token, TaskStatus.PENDING.value))
 
     def _success_response(message: str = "", status_value: str = TaskStatus.SUCCESS.value):
         result_content = _load_json_file_safely(result_path)
         if result_content is None:
-            return R.success({
+            return R.success(_with_agent_run({
                 "status": TaskStatus.PENDING.value,
                 "message": "结果文件正在写入，请稍后刷新",
                 "task_id": task_id,
                 "generation_token": generation_token,
-            })
+            }, generation_token, TaskStatus.PENDING.value))
         result_generation_token = result_content.get("generation_token")
         if generation_token and result_generation_token != generation_token:
             return _pending_for_generation()
         _normalize_result_payload(result_content)
-        return R.success({
+        return R.success(_with_agent_run({
             "status": status_value,
             "result": result_content,
             "message": message,
             "task_id": task_id,
             "generation_token": result_generation_token or generation_token,
-        })
+        }, generation_token or result_generation_token, status_value))
 
     # 优先读状态文件
     if os.path.exists(status_path):
         status_content = _load_json_file_safely(status_path)
         if status_content is None:
-            return R.success({
+            return R.success(_with_agent_run({
                 "status": TaskStatus.PENDING.value,
                 "message": "任务状态正在更新，请稍后重试",
                 "task_id": task_id,
                 "generation_token": generation_token,
-            })
+            }, generation_token, TaskStatus.PENDING.value))
 
         status = status_content.get("status")
         message = status_content.get("message", "")
@@ -640,47 +652,47 @@ def get_task_status(task_id: str, generation_token: Optional[str] = None):
                 return _success_response(message, status)
             else:
                 # 理论上不会出现，保险处理
-                return R.success({
+                return R.success(_with_agent_run({
                     "status": TaskStatus.PENDING.value,
                     "message": "任务完成，但结果文件未找到",
                     "task_id": task_id,
                     "generation_token": _response_token(status_content),
-                })
+                }, _response_token(status_content), TaskStatus.PENDING.value))
 
         if status == TaskStatus.ENHANCING.value and os.path.exists(result_path):
             return _success_response(message, TaskStatus.ENHANCING.value)
 
         if status == TaskStatus.FAILED.value:
-            failed_response = R.success({
+            failed_response = R.success(_with_agent_run({
                 "status": TaskStatus.FAILED.value,
                 "message": message or "任务失败",
                 "task_id": task_id,
                 "generation_token": _response_token(status_content),
-            })
+            }, _response_token(status_content), TaskStatus.FAILED.value))
             # 兼容手动修复/重试成功：结果文件比失败状态更新时，失败状态已经过期。
             if os.path.exists(result_path) and os.path.getmtime(result_path) > os.path.getmtime(status_path):
                 return _success_response(message)
             return failed_response
 
         # 处理中状态
-        return R.success({
+        return R.success(_with_agent_run({
             "status": status,
             "message": message,
             "task_id": task_id,
             "generation_token": _response_token(status_content),
-        })
+        }, _response_token(status_content), status))
 
     # 没有状态文件，但有结果
     if os.path.exists(result_path):
         return _success_response()
 
     # 什么都没有，默认PENDING
-    return R.success({
+    return R.success(_with_agent_run({
         "status": TaskStatus.PENDING.value,
         "message": "任务排队中",
         "task_id": task_id,
         "generation_token": generation_token,
-    })
+    }, generation_token, TaskStatus.PENDING.value))
 
 
 @router.get("/image_proxy")

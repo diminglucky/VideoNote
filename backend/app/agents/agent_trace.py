@@ -27,12 +27,13 @@ def _redact(value: Any, key: str = "") -> Any:
 
 
 class JsonlTraceStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, context: dict[str, Any] | None = None) -> None:
         self.path = Path(path)
+        self.context = dict(context or {})
 
     def append(self, event: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        record = _redact(dict(event))
+        record = _redact({**self.context, **dict(event)})
         record.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
