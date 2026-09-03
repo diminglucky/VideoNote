@@ -103,6 +103,7 @@ class VisualEnhancementRequest:
     generation_token: Optional[str] = None
     gpt: Optional[Any] = None
     visual_plan: Optional[list[dict[str, Any]]] = None
+    retry_count: int = 0
 
 
 class DownloadAgent:

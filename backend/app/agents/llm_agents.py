@@ -235,6 +235,32 @@ def review_visual_execution_report(
     return observation.data
 
 
+def replan_visual_execution(
+    gpt: Any,
+    trace_store: JsonlTraceStore,
+    task_id: str,
+    markdown: str,
+    visual_report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Ask VisualAgent for one bounded replacement plan after visual review."""
+    state = AgentState(
+        task_id=task_id,
+        markdown=markdown[:6000],
+        visual_requested=True,
+        visual_decided=False,
+        visual_summary={"previous_report": {
+            "planned_slots": int(visual_report.get("planned_slots") or 0),
+            "successful_slots": int(visual_report.get("successful_slots") or 0),
+            "failed_slots": int(visual_report.get("failed_slots") or 0),
+            "diagnostics": list(visual_report.get("diagnostics") or [])[-10:],
+        }},
+    )
+    observation = VisualAgent(LlmAgentClient(gpt, trace_store)).run(state, ToolRegistry())
+    if not observation.ok:
+        raise RuntimeError(observation.summary or "VisualAgent replan failed")
+    return state.visual_plan
+
+
 class VisualAgent:
     def __init__(self, client: LlmAgentClient):
         self.client = client

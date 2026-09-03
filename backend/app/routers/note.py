@@ -340,6 +340,7 @@ def _submit_visual_enhancement(
     enhance_token: str,
     generation_token: Optional[str] = None,
     gpt=None,
+    retry_count: int = 0,
 ) -> None:
     def _review_visual_completion(request: VisualEnhancementRequest) -> None:
         if request.gpt is None:
@@ -349,9 +350,9 @@ def _submit_visual_enhancement(
         if not isinstance(visual_report, dict):
             return
         from app.agents.agent_trace import JsonlTraceStore
-        from app.agents.llm_agents import review_visual_execution_report
+        from app.agents.llm_agents import replan_visual_execution, review_visual_execution_report
 
-        review_visual_execution_report(
+        review = review_visual_execution_report(
             request.gpt,
             JsonlTraceStore(
                 Path(NOTE_OUTPUT_DIR) / f"{request.task_id}.agent-trace.jsonl",
@@ -360,6 +361,33 @@ def _submit_visual_enhancement(
             request.task_id,
             str(payload.get("markdown") or request.note.markdown or ""),
             visual_report,
+        )
+        issues = review.get("issues") if isinstance(review, dict) else []
+        if retry_count >= 1 or review.get("passed") is not False:
+            return
+        if not any(isinstance(issue, dict) and issue.get("category") == "visual" for issue in issues or []):
+            return
+        new_plan = replan_visual_execution(
+            request.gpt,
+            JsonlTraceStore(
+                Path(NOTE_OUTPUT_DIR) / f"{request.task_id}.agent-trace.jsonl",
+                {"generation_id": generation_id_for_token(request.generation_token)},
+            ),
+            request.task_id,
+            str(payload.get("markdown") or request.note.markdown or ""),
+            visual_report,
+        )
+        if not new_plan:
+            return
+        request.note.visual_plan = new_plan
+        _submit_visual_enhancement(
+            task_id=request.task_id,
+            note=request.note,
+            platform=request.platform,
+            enhance_token=str(uuid.uuid4()),
+            generation_token=request.generation_token,
+            gpt=request.gpt,
+            retry_count=retry_count + 1,
         )
 
     VisualEnhancementAgent(
@@ -375,6 +403,7 @@ def _submit_visual_enhancement(
             generation_token=generation_token,
             gpt=gpt,
             visual_plan=getattr(note, "visual_plan", None),
+            retry_count=retry_count,
         )
     )
 
