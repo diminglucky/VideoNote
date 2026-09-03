@@ -11,6 +11,7 @@ from typing import Any
 _EVENT_KIND_MAP = {
     "decision": "decision",
     "specialist_tool_observation": "tool",
+    "visual_review": "observation",
     "observation": "observation",
     "final_state": "final",
 }

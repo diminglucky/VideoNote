@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.agents.agent_trace import JsonlTraceStore
-from app.agents.llm_agents import ContentAgent, LlmAgentClient, SupervisorAgent
+from app.agents.llm_agents import ContentAgent, LlmAgentClient, ReviewerAgent, SupervisorAgent
 from pydantic import ValidationError
 
 from app.agents.llm_protocol import AgentAction, AgentState, Observation, ToolRegistry, VisualResult
@@ -136,6 +136,48 @@ def test_finish_requires_generation_artifacts(tmp_path):
     assert observation.error_type == "invalid_action"
     assert state.final_status == "running"
     assert state.finished is False
+
+
+def test_reviewer_agent_can_review_visual_execution_report(tmp_path):
+    client = ScriptedClient([{"passed": True, "issues": []}])
+    state = AgentState(
+        task_id="task-visual-review",
+        markdown="# note\n![](/static/screenshots/key.jpg)",
+        visual_summary={
+            "planned_slots": 1,
+            "successful_slots": 1,
+            "failed_slots": 0,
+            "slots": [{"slot_id": 0, "status": "inserted", "timestamp": 42}],
+        },
+        visual_decided=True,
+    )
+
+    observation = ReviewerAgent(
+        LlmAgentClient(FakeGPT(client), JsonlTraceStore(tmp_path / "trace.jsonl"))
+    ).run(state)
+
+    assert observation.ok is True
+    assert observation.data["passed"] is True
+    assert observation.data["issues"] == []
+    assert state.review["passed"] is True
+
+
+def test_review_visual_execution_report_writes_structured_trace(tmp_path):
+    client = ScriptedClient([{"passed": False, "issues": [{"category": "visual", "message": "wrong frame", "evidence": "slot 0"}]}])
+    trace_path = tmp_path / "trace.jsonl"
+
+    result = __import__("app.agents.llm_agents", fromlist=["review_visual_execution_report"]).review_visual_execution_report(
+        FakeGPT(client),
+        JsonlTraceStore(trace_path),
+        "task-visual-review",
+        "# note",
+        {"planned_slots": 1, "successful_slots": 1, "slots": [{"status": "inserted"}]},
+    )
+
+    assert result["passed"] is False
+    assert result["issues"][0]["category"] == "visual"
+    records = [__import__("json").loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert any(record.get("kind") == "visual_review" for record in records)
 
 
 def test_finish_requires_passing_review(tmp_path):

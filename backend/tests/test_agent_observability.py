@@ -215,3 +215,26 @@ def test_projector_drops_unknown_identifiers_that_could_contain_paths(tmp_path):
     assert event["agent"] is None
     assert event["tool"] is None
     assert event["error_type"] is None
+
+
+def test_projector_maps_visual_review_to_safe_observation(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "visual_review",
+                "generation_id": "current",
+                "agent": "reviewer",
+                "ok": True,
+                "summary": "visual execution reviewed",
+                "data": {"secret": "must not leak"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = project_agent_run(path, "current")
+
+    assert result["events"][0]["kind"] == "observation"
+    assert result["events"][0]["agent"] == "reviewer"
+    assert "must not leak" not in json.dumps(result)

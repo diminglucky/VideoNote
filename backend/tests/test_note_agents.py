@@ -644,6 +644,99 @@ class TestNoteAgents(unittest.TestCase):
         self.assertEqual(updates[0][3], TaskStatus.PARTIAL_SUCCESS)
         self.assertIn("worker failed", updates[0][4])
 
+    def test_visual_enhancement_agent_calls_completion_callback_after_success(self):
+        callbacks = []
+
+        class _Future:
+            def add_done_callback(self, callback):
+                self.callback = callback
+
+            def result(self):
+                return {"status": "success"}
+
+        class _Executor:
+            def submit(self, *_args):
+                return _Future()
+
+        class _Service:
+            def enhance_saved_note(self, *_args):
+                return True
+
+        with ProjectTempDir() as tmp_dir:
+            video_path = pathlib.Path(tmp_dir) / "video.mp4"
+            video_path.write_bytes(b"video")
+            note = type("_Note", (), {"audio_meta": type("_Meta", (), {"video_path": str(video_path), "duration": 60})()})()
+            agent = VisualEnhancementAgent(
+                executor=_Executor(),
+                status_updater=lambda *_args: None,
+                enhancement_service_factory=_Service,
+                completion_callback=lambda request: callbacks.append(request.task_id),
+            )
+            future = agent.submit(VisualEnhancementRequest(task_id="task-1", note=note, platform="bilibili", enhance_token="e", generation_token="g"))
+            future.callback(future)
+
+        self.assertEqual(callbacks, ["task-1"])
+
+    def test_visual_enhancement_agent_does_not_call_completion_callback_after_worker_failure(self):
+        callbacks = []
+
+        class _Future:
+            def add_done_callback(self, callback):
+                callback(self)
+
+            def result(self):
+                raise RuntimeError("worker failed")
+
+        class _Executor:
+            def submit(self, *_args):
+                return _Future()
+
+        class _Service:
+            def enhance_saved_note(self, *_args):
+                return True
+
+        with ProjectTempDir() as tmp_dir:
+            video_path = pathlib.Path(tmp_dir) / "video.mp4"
+            video_path.write_bytes(b"video")
+            note = type("_Note", (), {"audio_meta": type("_Meta", (), {"video_path": str(video_path), "duration": 60})()})()
+            VisualEnhancementAgent(
+                executor=_Executor(), status_updater=lambda *_args: None,
+                enhancement_service_factory=_Service,
+                completion_callback=lambda request: callbacks.append(request.task_id),
+            ).submit(VisualEnhancementRequest(task_id="task-1", note=note, platform="bilibili", enhance_token="e", generation_token="g"))
+
+        self.assertEqual(callbacks, [])
+
+    def test_visual_enhancement_agent_isolates_completion_callback_failure(self):
+        updates = []
+
+        class _Future:
+            def add_done_callback(self, callback):
+                callback(self)
+
+            def result(self):
+                return True
+
+        class _Executor:
+            def submit(self, *_args):
+                return _Future()
+
+        class _Service:
+            def enhance_saved_note(self, *_args):
+                return True
+
+        with ProjectTempDir() as tmp_dir:
+            video_path = pathlib.Path(tmp_dir) / "video.mp4"
+            video_path.write_bytes(b"video")
+            note = type("_Note", (), {"audio_meta": type("_Meta", (), {"video_path": str(video_path), "duration": 60})()})()
+            VisualEnhancementAgent(
+                executor=_Executor(), status_updater=lambda *args: updates.append(args),
+                enhancement_service_factory=_Service,
+                completion_callback=lambda _request: (_ for _ in ()).throw(RuntimeError("review failed")),
+            ).submit(VisualEnhancementRequest(task_id="task-1", note=note, platform="bilibili", enhance_token="e", generation_token="g"))
+
+        self.assertEqual(updates, [])
+
     def test_execution_plan_keeps_visual_enhancement_background_when_deferred(self):
         plan = build_note_execution_plan(
             AgentExecutionContext(

@@ -200,6 +200,41 @@ class ReviewerAgent:
         return Observation(ok=True, summary="ReviewerAgent completed", data=state.review)
 
 
+def review_visual_execution_report(
+    gpt: Any,
+    trace_store: JsonlTraceStore,
+    task_id: str,
+    markdown: str,
+    visual_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Ask ReviewerAgent to validate the bounded result of visual execution."""
+    state = AgentState(
+        task_id=task_id,
+        markdown=markdown[:6000],
+        visual_summary={
+            "planned_slots": int(visual_report.get("planned_slots") or 0),
+            "successful_slots": int(visual_report.get("successful_slots") or 0),
+            "failed_slots": int(visual_report.get("failed_slots") or 0),
+            "skipped_slots": int(visual_report.get("skipped_slots") or 0),
+            "slots": list(visual_report.get("slots") or [])[:12],
+            "diagnostics": list(visual_report.get("diagnostics") or [])[-10:],
+        },
+        visual_decided=True,
+    )
+    observation = ReviewerAgent(
+        LlmAgentClient(gpt, trace_store)
+    ).run(state)
+    trace_store.append({
+        "kind": "visual_review",
+        "task_id": task_id,
+        "ok": observation.ok,
+        "review": observation.data,
+    })
+    if not observation.ok:
+        raise RuntimeError(observation.summary or "Visual ReviewerAgent failed")
+    return observation.data
+
+
 class VisualAgent:
     def __init__(self, client: LlmAgentClient):
         self.client = client

@@ -341,9 +341,31 @@ def _submit_visual_enhancement(
     generation_token: Optional[str] = None,
     gpt=None,
 ) -> None:
+    def _review_visual_completion(request: VisualEnhancementRequest) -> None:
+        if request.gpt is None:
+            return
+        payload = _load_json_file_safely(Path(NOTE_OUTPUT_DIR) / f"{request.task_id}.json")
+        visual_report = payload.get("visual_report") if isinstance(payload, dict) else None
+        if not isinstance(visual_report, dict):
+            return
+        from app.agents.agent_trace import JsonlTraceStore
+        from app.agents.llm_agents import review_visual_execution_report
+
+        review_visual_execution_report(
+            request.gpt,
+            JsonlTraceStore(
+                Path(NOTE_OUTPUT_DIR) / f"{request.task_id}.agent-trace.jsonl",
+                {"generation_id": generation_id_for_token(request.generation_token)},
+            ),
+            request.task_id,
+            str(payload.get("markdown") or request.note.markdown or ""),
+            visual_report,
+        )
+
     VisualEnhancementAgent(
         executor=visual_enhancement_executor,
         status_updater=_update_enhancement_status_if_current,
+        completion_callback=_review_visual_completion,
     ).submit(
         VisualEnhancementRequest(
             task_id=task_id,

@@ -555,10 +555,12 @@ class VisualEnhancementAgent:
         executor,
         status_updater: Callable[[str, str, Optional[str], TaskStatus, str], None],
         enhancement_service_factory=None,
+        completion_callback: Optional[Callable[[VisualEnhancementRequest], None]] = None,
     ):
         self.executor = executor
         self.status_updater = status_updater
         self.enhancement_service_factory = enhancement_service_factory
+        self.completion_callback = completion_callback
 
     def submit(self, request: VisualEnhancementRequest):
         video_path = getattr(request.note.audio_meta, "video_path", None)
@@ -639,6 +641,15 @@ class VisualEnhancementAgent:
                     TaskStatus.PARTIAL_SUCCESS,
                     f"笔记已完成，但截图增强失败：{exc}",
                 )
+                return
+            if self.completion_callback is not None:
+                try:
+                    self.completion_callback(request)
+                except Exception as exc:
+                    logger.exception(
+                        "Visual completion review failed (task_id=%s)",
+                        request.task_id,
+                    )
 
         future.add_done_callback(_on_done)
         return future
