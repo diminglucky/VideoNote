@@ -602,6 +602,17 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
   const progressStatus = isRetrySubmitting ? 'PENDING' : taskStatus
   const progressMessage = isRetrySubmitting ? '正在提交重新生成请求，旧笔记会先保留' : runningMessage
   const screenshotSummary = visualReportSummary(currentTask?.visualReport)
+  const screenshotRequested = Boolean(
+    currentTask?.formData?.screenshot ||
+    currentTask?.formData?.format?.includes('screenshot'),
+  )
+  const progressSteps = useMemo(
+    () =>
+      screenshotRequested
+        ? taskSteps
+        : taskSteps.filter(step => step.key !== 'FORMATTING' && step.key !== 'ENHANCING'),
+    [screenshotRequested],
+  )
 
   // 缓存 ReactMarkdown components，仅在 baseURL 变化时重建
   const markdownComponents = useMemo(() => createMarkdownComponents(baseURL), [baseURL])
@@ -760,11 +771,15 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
               </p>
             </div>
           </div>
-          <StepBar steps={taskSteps} currentStep={taskStatus} />
+          <StepBar steps={progressSteps} currentStep={taskStatus} />
           <AgentRunTimeline agentRun={currentTask?.agentRun} />
           <div className="mt-6 flex items-center gap-2 text-sm text-neutral-500">
             <Loading className="h-5 w-5" />
-            <span>笔记正文会优先生成，关键截图随后异步补齐。</span>
+            <span>
+              {screenshotRequested
+                ? '笔记正文会优先生成，关键截图随后异步补齐。'
+                : '笔记正文会直接生成并保存。'}
+            </span>
           </div>
         </div>
       </div>
@@ -864,7 +879,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = memo(({ status }) => {
                         {screenshotSummary && (
                           <div className="mb-2 text-xs text-amber-800">{screenshotSummary}</div>
                         )}
-                        <StepBar steps={taskSteps} currentStep={progressStatus} compact />
+                        <StepBar steps={progressSteps} currentStep={progressStatus} compact />
                       </div>
                     )}
                     <AgentRunTimeline agentRun={currentTask?.agentRun} />
