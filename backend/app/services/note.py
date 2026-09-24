@@ -33,7 +33,7 @@ logger.setLevel(logging.INFO)
 
 
 def is_llm_agent_enabled() -> bool:
-    return os.getenv("BILINOTE_LLM_AGENT_ENABLED", "true").strip().lower() in {
+    return os.getenv("BILINOTE_LLM_AGENT_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "on"
     }
 

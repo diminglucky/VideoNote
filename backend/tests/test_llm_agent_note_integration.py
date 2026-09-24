@@ -136,10 +136,10 @@ def test_disabled_flag_does_not_enable_llm_runtime(monkeypatch):
     assert is_llm_agent_enabled() is False
 
 
-def test_default_flag_enables_llm_runtime(monkeypatch):
+def test_default_flag_uses_legacy_runtime(monkeypatch):
     monkeypatch.delenv("BILINOTE_LLM_AGENT_ENABLED", raising=False)
 
-    assert is_llm_agent_enabled() is True
+    assert is_llm_agent_enabled() is False
 
 
 def test_enabled_runtime_returns_compatible_note_result_and_trace(tmp_path, monkeypatch):
