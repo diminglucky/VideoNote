@@ -263,7 +263,11 @@ def _normalize_result_payload(payload: dict) -> dict:
     return payload
 
 
-def _recover_result_from_cache(task_id: str, generation_token: Optional[str] = None) -> bool:
+def _recover_result_from_cache(
+    task_id: str,
+    generation_token: Optional[str] = None,
+    allow_active: bool = False,
+) -> bool:
     result_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.json")
     status_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.status.json")
     markdown_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}_markdown.md")
@@ -303,7 +307,7 @@ def _recover_result_from_cache(task_id: str, generation_token: Optional[str] = N
     if os.path.exists(status_path):
         status_content = _load_json_file_safely(status_path, retries=1)
         if isinstance(status_content, dict):
-            if status_content.get("status") in active_statuses:
+            if status_content.get("status") in active_statuses and not allow_active:
                 return False
         if os.path.getmtime(status_path) >= os.path.getmtime(markdown_path):
             return False
@@ -353,6 +357,51 @@ def _recover_result_from_cache(task_id: str, generation_token: Optional[str] = N
     except Exception as exc:
         logger.warning("恢复缓存结果失败 (task_id=%s): %s", task_id, exc)
         return False
+
+
+def recover_interrupted_tasks() -> int:
+    """Resolve persisted in-progress tasks that cannot survive a backend restart."""
+    output_dir = Path(NOTE_OUTPUT_DIR)
+    if not output_dir.exists():
+        return 0
+
+    active_statuses = {
+        TaskStatus.PENDING.value,
+        TaskStatus.PARSING.value,
+        TaskStatus.DOWNLOADING.value,
+        TaskStatus.TRANSCRIBING.value,
+        TaskStatus.SUMMARIZING.value,
+        TaskStatus.FORMATTING.value,
+        TaskStatus.SAVING.value,
+        TaskStatus.ENHANCING.value,
+    }
+    recovered = 0
+    for status_file in output_dir.glob("*.status.json"):
+        task_id = status_file.name[: -len(".status.json")]
+        status_content = _load_json_file_safely(str(status_file), retries=1)
+        if not isinstance(status_content, dict):
+            continue
+        if status_content.get("status") not in active_statuses:
+            continue
+
+        generation_token = status_content.get("generation_token")
+        if _recover_result_from_cache(
+            task_id,
+            generation_token=generation_token,
+            allow_active=True,
+        ):
+            recovered += 1
+            continue
+
+        write_status_record(
+            task_id,
+            TaskStatus.FAILED,
+            message="应用重启导致任务中断，请重新生成",
+            generation_token=generation_token,
+            output_dir=output_dir,
+        )
+        recovered += 1
+    return recovered
 
 
 def _clear_previous_generation_outputs(task_id: str) -> None:
