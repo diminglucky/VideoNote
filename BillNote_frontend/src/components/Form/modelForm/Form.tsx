@@ -59,7 +59,7 @@ const Panel = ({
   description: string
   children: ReactNode
 }) => (
-  <section className="flex min-h-0 flex-col rounded-lg border border-neutral-200 bg-white shadow-sm">
+  <section className="flex min-h-0 shrink-0 flex-col rounded-lg border border-neutral-200 bg-white shadow-sm">
     <div className="shrink-0 border-b border-neutral-100 px-4 py-2.5">
       <h2 className="text-sm font-semibold text-neutral-950">{title}</h2>
       <p className="mt-0.5 text-xs leading-5 text-neutral-500">{description}</p>
@@ -203,7 +203,7 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
         </span>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
         <Form {...providerForm}>
           <form onSubmit={providerForm.handleSubmit(onProviderSubmit)} className="min-h-0">
             <Panel
