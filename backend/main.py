@@ -19,7 +19,7 @@ from app.utils.logger import get_logger
 from app import create_app
 from app.services.transcriber_config_manager import TranscriberConfigManager
 from events import register_handler
-from ffmpeg_helper import ensure_ffmpeg_or_raise
+from ffmpeg_helper import configure_ffmpeg_path
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -46,6 +46,11 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("[startup 1/5] register_handler() — 注册事件处理器")
         register_handler()
+        discovered_ffmpeg = configure_ffmpeg_path()
+        if discovered_ffmpeg:
+            logger.info(f"           使用 FFmpeg: {discovered_ffmpeg}")
+        else:
+            logger.warning("           未自动发现 FFmpeg，请在 .env 配置 FFMPEG_BIN_PATH")
 
         logger.info("[startup 2/5] init_db() — 初始化 SQLite 数据库")
         init_db()

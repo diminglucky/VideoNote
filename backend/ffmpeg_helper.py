@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
 from app.utils.logger import get_logger
@@ -36,11 +37,73 @@ def _load_dotenv_from_multiple_paths():
 
 
 _load_dotenv_from_multiple_paths()
+
+
+def _valid_ffmpeg_dir(path: str | os.PathLike[str] | None) -> str | None:
+    if not path:
+        return None
+    candidate = Path(path)
+    executable = candidate / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if candidate.is_dir() and executable.is_file():
+        return str(candidate.resolve())
+    return None
+
+
+def resolve_ffmpeg_bin_dir() -> str | None:
+    """Find an FFmpeg directory from config, app data caches, or common install paths."""
+    candidates = [
+        os.getenv("FFMPEG_BIN_PATH"),
+    ]
+
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        candidates.extend(
+            [
+                os.path.join(local_app_data, "VideoNote", "ffmpeg", "bin"),
+                os.path.join(local_app_data, "BiliNote", "ffmpeg", "bin"),
+            ]
+        )
+
+    exe_dir = Path(sys.executable).resolve().parent
+    script_dir = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            exe_dir / "ffmpeg" / "bin",
+            exe_dir / "bin",
+            script_dir / "bin",
+            r"C:\ffmpeg\bin",
+            r"C:\Program Files\ffmpeg\bin",
+            r"C:\Program Files (x86)\ffmpeg\bin",
+            r"C:\ProgramData\chocolatey\bin",
+        ]
+    )
+
+    for candidate in candidates:
+        resolved = _valid_ffmpeg_dir(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def configure_ffmpeg_path() -> str | None:
+    """Prepend a discovered FFmpeg directory to PATH for subprocess-based tools."""
+    resolved = resolve_ffmpeg_bin_dir()
+    if not resolved:
+        return None
+
+    os.environ["FFMPEG_BIN_PATH"] = resolved
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    if resolved not in path_parts:
+        os.environ["PATH"] = resolved + os.pathsep + current_path
+    return resolved
+
+
 def check_ffmpeg_exists() -> bool:
     """
     检查 ffmpeg 是否可用。优先使用 FFMPEG_BIN_PATH 环境变量指定的路径。
     """
-    ffmpeg_bin_path = os.getenv("FFMPEG_BIN_PATH")
+    ffmpeg_bin_path = configure_ffmpeg_path() or os.getenv("FFMPEG_BIN_PATH")
     logger.info(f"FFMPEG_BIN_PATH: {ffmpeg_bin_path}")
     if ffmpeg_bin_path and os.path.isdir(ffmpeg_bin_path):
         os.environ["PATH"] = ffmpeg_bin_path + os.pathsep + os.environ.get("PATH", "")
