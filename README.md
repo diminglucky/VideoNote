@@ -1,6 +1,6 @@
 # VideoNote
 
-> 当前版本：`0.2.6`
+> 当前版本：`0.2.8`
 >
 > 使用限制：本项目仅允许个人学习、研究、评估和非商业自用。未经作者明确书面授权，禁止任何形式的商业化使用、商业部署、付费服务、二次售卖或商业集成。
 
@@ -73,30 +73,32 @@ VideoNote 的 agent 设计追求“职责清晰”和“不过度包装”。顶
 ```text
 用户输入
   -> NoteGenerator
-  -> PlanExecutor
-  -> DownloadAgent
-  -> TranscriptAgent
-  -> NoteWriterAgent
+  -> LlmNoteOrchestrator
+  -> SupervisorAgent
+     -> ContentAgent / 闭集工具（字幕、转写、写作）
+     -> ReviewerAgent
+     -> VisualAgent / 视觉计划
   -> 基础 Markdown
-  -> VisualEnhancementAgent
-  -> VisualScreenshotAgent 内部流程
-  -> MarkdownComposerAgent
-  -> 最终笔记 / 导出 / 问答索引
+  -> VisualEnhancementService
+  -> VisualScreenshotAgent / 截图筛选与写回
+  -> RAG 索引 / 最终笔记 / 导出
 ```
 
 当前主要角色：
 
 - `NoteGenerator`：任务入口，负责参数、状态、缓存、持久化和整体生命周期。
-- `PlanExecutor`：执行顶层计划，让下载、转写、写作、截图增强这些长步骤可观察。
-- `DownloadAgent`：负责视频、音频、字幕和元信息获取。
-- `TranscriptAgent`：负责转写或读取字幕缓存。
-- `NoteWriterAgent`：负责根据转写内容生成高质量基础 Markdown。
-- `VisualEnhancementAgent`：在基础笔记保存后启动截图增强，避免用户一直等不到正文。
+- `LlmNoteOrchestrator`：为单次生成建立 AgentState、预算和 trace，并驱动观察—行动循环。
+- `SupervisorAgent`：根据当前状态选择工具、委派角色、评审、返工、降级或完成。
+- `ContentAgent`：基于转录和视频元数据生成或修订基础 Markdown。
+- `ReviewerAgent`：检查内容完整性、来源一致性和视觉执行质量，未通过时给出结构化问题。
+- `VisualAgent`：决定是否需要视觉证据，生成有界时间窗口，并在失败评审后执行一次重规划。
+- `VisualEnhancementService`：在基础笔记保存后异步执行截图增强，避免用户一直等不到正文。
 - `VisualScreenshotAgent`：负责视觉截图内部流程，包括文档分析、候选时间选择、截帧、评分、去重和插入。
 - `MarkdownComposerAgent`：负责最终 Markdown 的结构、链接、截图和版本内容合成。
-- `index_task_for_chat`：任务保存后的问答索引适配器，不再作为核心生成 agent。
+- `ToolRegistry`：只暴露下载、字幕、转写、写作和视觉增强等受控能力。
+- `JsonlTraceStore`：记录脱敏后的决策、Observation、工具调用和最终状态。
 
-后续继续优化的方向不是盲目增加 agent，而是让每个角色有明确输入、输出、失败边界和可测试行为。
+下载、转码、转写、Markdown 写盘、截图生成、缓存和数据库持久化仍由确定性服务执行；LLM 只负责受约束的决策，不直接执行任意代码或访问任意路径。
 
 ## 技术栈
 
@@ -180,6 +182,7 @@ pnpm dev
 
 - `BACKEND_PORT`：后端端口，默认 `8483`
 - `FRONTEND_PORT`：前端端口，默认 `3015`
+- `APP_BIND_HOST` / `APP_PORT`：Docker 对外监听地址与端口，默认仅绑定 `127.0.0.1:3015`
 - `FFMPEG_BIN_PATH`：自定义 FFmpeg 路径
 - `TRANSCRIBER_TYPE`：转写方式，例如 `fast-whisper` 或 `groq`
 - `WHISPER_MODEL_SIZE`：Whisper 模型大小，例如 `medium`

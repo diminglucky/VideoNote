@@ -1,7 +1,7 @@
 {
   "name": "videonote-extension",
   "displayName": "VideoNote",
-  "version": "0.2.3",
+  "version": "0.2.8",
   "private": true,
   "packageManager": "pnpm@9.7.1",
   "description": "在浏览器里把视频链接一键变成 Markdown 笔记（Bilibili / YouTube / Douyin / Kuaishou）",

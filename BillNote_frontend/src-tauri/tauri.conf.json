@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "VideoNote",
-  "version": "0.2.6",
+  "version": "0.2.8",
   "identifier": "com.diming.videonote",
   "build": {
     "frontendDist": "../dist",

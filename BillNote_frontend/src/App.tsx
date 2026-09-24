@@ -6,6 +6,7 @@ import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router
 import BackendHealthIndicator from '@/components/BackendHealth/BackendHealthIndicator'
 import BackendInitDialog from '@/components/BackendInitDialog'
 import StartupBanner from '@/components/SystemDiagnostic/StartupBanner'
+import { ONBOARDING_STORAGE_KEY } from '@/constants/onboarding'
 import { useCheckBackend } from '@/hooks/useCheckBackend'
 import { useTaskPolling } from '@/hooks/useTaskPolling'
 import Index from '@/pages/Index'
@@ -26,7 +27,7 @@ const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 function OnboardingGuard({ children }: { children: React.ReactNode }) {
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
   if (!isTauri) return <>{children}</>
-  if (localStorage.getItem('bilinote-onboarded') !== '1') {
+  if (localStorage.getItem(ONBOARDING_STORAGE_KEY) !== '1') {
     return <Navigate to="/onboarding" replace />
   }
   return <>{children}</>

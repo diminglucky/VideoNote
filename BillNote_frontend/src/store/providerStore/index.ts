@@ -59,7 +59,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
       base_url: provider.baseUrl,
     }
     try {
-      const res = await addProvider(payload)
+      const res = await addProvider(payload, { silent: true })
       if (res.data.code === 0) {
         const item = res.data.data
         console.log('Provider ', item)
@@ -69,6 +69,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
       }
     } catch (error) {
       console.error('Error fetching provider:', error)
+      throw error
     }
   },
   // 按 id 获取单个 provider
@@ -84,10 +85,11 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         base_url: merged.baseUrl,
       }
       // 拦截器已解包：成功时直接返回 data 部分
-      await updateProviderById(data)
+      await updateProviderById(data, { silent: true })
       await get().fetchProviderList()
     } catch (error) {
       console.error('Error updating provider:', error)
+      throw error
     }
   },
   getProviderList: () => get().provider,

@@ -81,7 +81,7 @@ export const taskApi = {
     return await request.get(`/task_status/${taskId}${query}`, { suppressToast: true }) as TaskStatusResponse
   },
 
-  async delete(data: { video_id: string; platform: string }) {
+  async delete(data: { video_id: string; platform: string; task_id?: string }) {
     const response = await request.post('/delete_task', data)
     toast.success('任务已成功删除')
     return response

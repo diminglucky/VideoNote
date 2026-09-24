@@ -105,7 +105,7 @@ class ProviderService:
     def get_all_providers_safe():
         rows = get_all_providers()
 
-        return [ProviderService.serialize_provider(row) for row in rows] if (rows) else []
+        return [ProviderService.serialize_provider_safe(row) for row in rows] if rows else []
     @staticmethod
     def get_provider_by_name(name: str):
         row = get_provider_by_name(name)

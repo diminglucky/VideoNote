@@ -19,7 +19,7 @@ export const { data: tasks, dataReady: tasksReady } = useWebExtensionStorage<Tas
 
 export function upsertTask(record: TaskRecord) {
   const list = tasks.value ?? []
-  const idx = list.findIndex(t => t.taskId === record.taskId)
+  const idx = list.findIndex((t: TaskRecord) => t.taskId === record.taskId)
   if (idx >= 0)
     list.splice(idx, 1, { ...list[idx], ...record })
   else
@@ -29,5 +29,5 @@ export function upsertTask(record: TaskRecord) {
 
 export function removeTask(taskId: string) {
   const list = tasks.value ?? []
-  tasks.value = list.filter(t => t.taskId !== taskId)
+  tasks.value = list.filter((t: TaskRecord) => t.taskId !== taskId)
 }

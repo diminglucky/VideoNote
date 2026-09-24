@@ -57,7 +57,7 @@ services:
     container_name: bilinote-nginx
     image: nginx:1.25-alpine
     ports:
-      - "${APP_PORT:-3015}:80"
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3015}:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:

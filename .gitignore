@@ -345,6 +345,7 @@ cython_debug/
 /.tmp/
 /BiliNote_frontend/.idea/*
 /BiliNote_frontend/src-tauri/bin/
+/release-artifacts/
 
 # FFmpeg 构建文件（不应该提交到仓库）
 ffmpeg*/

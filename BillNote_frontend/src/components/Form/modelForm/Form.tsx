@@ -136,10 +136,18 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
 
   const modelDisabledMessage = useMemo(() => {
     if (!savedProviderId) return '保存供应商后可以添加模型。'
-    if (providerForm.formState.isDirty) return '当前配置有未保存修改，保存后再刷新模型列表。'
     if (!apiKey || !baseUrl) return '填写 API Key 和 API 地址后，再刷新模型列表。'
     return ''
-  }, [apiKey, baseUrl, providerForm.formState.isDirty, savedProviderId])
+  }, [apiKey, baseUrl, savedProviderId])
+
+  const persistProviderDraft = useCallback(async () => {
+    if (!savedProviderId) {
+      throw new Error('请先保存供应商信息')
+    }
+    const values = providerForm.getValues()
+    await updateProvider({ ...values, id: savedProviderId })
+    providerForm.reset(values)
+  }, [providerForm, savedProviderId, updateProvider])
 
   const handleDelete = async (modelId: number | string) => {
     if (!window.confirm('确定要删除这个模型吗？')) return
@@ -166,6 +174,9 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
 
     try {
       setTesting(true)
+      if (providerForm.formState.isDirty) {
+        await persistProviderDraft()
+      }
       await testConnection({ id: savedProviderId }, { silent: true })
       toast.success('测试连通性成功')
     } catch (error: any) {
@@ -176,17 +187,21 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
   }
 
   const onProviderSubmit = async (values: ProviderFormValues) => {
-    if (isEditMode && savedProviderId) {
-      await updateProvider({ ...values, id: savedProviderId })
-      providerForm.reset(values)
-      toast.success('更新供应商成功')
-      return
-    }
+    try {
+      if (isEditMode && savedProviderId) {
+        await updateProvider({ ...values, id: savedProviderId })
+        providerForm.reset(values)
+        toast.success('更新供应商成功')
+        return
+      }
 
-    const created = (await addNewProvider({ ...values })) as any
-    const nextId = typeof created === 'string' ? created : created?.id
-    toast.success('新增供应商成功')
-    if (nextId) navigate(`/settings/model/${nextId}`, { replace: true })
+      const created = (await addNewProvider({ ...values })) as any
+      const nextId = typeof created === 'string' ? created : created?.id
+      toast.success('新增供应商成功')
+      if (nextId) navigate(`/settings/model/${nextId}`, { replace: true })
+    } catch (error: any) {
+      toast.error(error?.data?.msg || error?.msg || error?.message || '保存供应商失败')
+    }
   }
 
   if (loading) {
@@ -344,6 +359,7 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
               providerId={savedProviderId || ''}
               disabled={Boolean(modelDisabledMessage)}
               disabledMessage={modelDisabledMessage}
+              onBeforeLoad={persistProviderDraft}
               onModelSaved={() => refreshEnabledModels()}
             />
 

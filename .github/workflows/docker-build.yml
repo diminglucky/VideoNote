@@ -76,7 +76,7 @@ jobs:
           echo "  docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           echo ""
           echo "Run the container:"
-          echo "  docker run -d -p 80:80 \\"
+          echo "  docker run -d -p 127.0.0.1:80:80 \\"
           echo "    -v bilinote-data:/app/backend/data \\"
           echo "    -v bilinote-config:/app/backend/config \\"
           echo "    -v bilinote-static:/app/backend/static \\"

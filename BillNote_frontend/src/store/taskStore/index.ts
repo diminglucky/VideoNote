@@ -89,7 +89,7 @@ interface TaskStore {
   currentTaskId: string | null
   addPendingTask: (taskId: string, platform: string, formData?: any, generationToken?: string) => void
   updateTaskContent: (id: string, data: TaskUpdate) => void
-  removeTask: (id: string) => void
+  removeTask: (id: string) => Promise<void>
   clearTasks: () => void
   setCurrentTask: (taskId: string | null) => void
   getCurrentTask: () => Task | null
@@ -338,20 +338,23 @@ export const useTaskStore = create<TaskStore>()(
 
       removeTask: async id => {
         const task = get().tasks.find(t => t.id === id)
+        if (!task) return
 
-        // 更新 Zustand 状态
-        set(state => ({
-          tasks: state.tasks.filter(task => task.id !== id),
-          currentTaskId: state.currentTaskId === id ? null : state.currentTaskId,
-        }))
-
-        // 调用后端删除接口（如果找到了任务）
-        if (task) {
+        try {
           await taskApi.delete({
+            task_id: task.id,
             video_id: task.audioMeta.video_id,
             platform: task.platform,
           })
+        } catch (error) {
+          console.error('删除任务失败：', error)
+          return
         }
+
+        set(state => ({
+          tasks: state.tasks.filter(item => item.id !== id),
+          currentTaskId: state.currentTaskId === id ? null : state.currentTaskId,
+        }))
       },
 
       clearTasks: () => set({ tasks: [], currentTaskId: null }),

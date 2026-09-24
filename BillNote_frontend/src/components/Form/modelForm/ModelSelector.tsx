@@ -15,6 +15,7 @@ interface ModelSelectorProps {
   providerId: string
   disabled?: boolean
   disabledMessage?: string
+  onBeforeLoad?: () => Promise<void>
   onModelSaved?: () => void | Promise<void>
 }
 
@@ -22,6 +23,7 @@ export function ModelSelector({
   providerId,
   disabled = false,
   disabledMessage,
+  onBeforeLoad,
   onModelSaved,
 }: ModelSelectorProps) {
   const { models, loading, selectedModel, loadModels, setSelectedModel, addNewModel } =
@@ -43,6 +45,14 @@ export function ModelSelector({
     if (disabled) {
       toast.error(disabledMessage || '请先完成供应商配置')
       return
+    }
+    if (onBeforeLoad) {
+      try {
+        await onBeforeLoad()
+      } catch (error: any) {
+        toast.error(error?.data?.msg || error?.msg || error?.message || '保存供应商配置失败')
+        return
+      }
     }
     const loadedModels = await loadModels(providerId, { silent: true })
     if (loadedModels.length > 0) {

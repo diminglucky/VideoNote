@@ -736,7 +736,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
             self.assertTrue(pathlib.Path(candidate.path).exists())
             self.assertEqual([path for path in created if path.exists()], [pathlib.Path(candidate.path)])
 
-    def test_best_screenshot_prefers_stable_frame_over_one_off_transition(self):
+    def test_best_screenshot_prefers_stable_frame_when_quality_is_tied(self):
         generator = NoteGenerator.__new__(NoteGenerator)
 
         class _Reader:
@@ -748,7 +748,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
             def _score_frame(path):
                 timestamp = int(pathlib.Path(path).stem.split("_")[-1])
                 if timestamp == 18:
-                    return 0.96, 1000
+                    return 0.84, 1000
                 if timestamp in {34, 45, 49}:
                     return 0.84, 2000
                 return 0.25, timestamp
@@ -796,7 +796,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
             self.assertEqual(candidate.timestamp, 45)
             self.assertEqual([path for path in created if path.exists()], [pathlib.Path(candidate.path)])
 
-    def test_best_screenshot_prefers_later_complete_state_when_quality_is_close(self):
+    def test_best_screenshot_prefers_later_complete_state_when_quality_is_tied(self):
         generator = NoteGenerator.__new__(NoteGenerator)
 
         class _Reader:
@@ -810,7 +810,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
                 if timestamp == 18:
                     return 0.90, 1000
                 if timestamp in {60, 78, 112, 118}:
-                    return 0.78, 2000
+                    return 0.90, 2000
                 return 0.30, timestamp
 
             @staticmethod
@@ -857,7 +857,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
             self.assertEqual(candidate.timestamp, 112)
             self.assertEqual([path for path in created if path.exists()], [pathlib.Path(candidate.path)])
 
-    def test_best_screenshot_prefers_final_information_over_early_title_frame(self):
+    def test_best_screenshot_prefers_final_information_when_quality_is_tied(self):
         generator = NoteGenerator.__new__(NoteGenerator)
 
         class _Reader:
@@ -871,7 +871,7 @@ class TestNoteScreenshotFallback(unittest.TestCase):
                 if timestamp == 18:
                     return 0.92, 1000
                 if timestamp in {60, 78, 112, 118}:
-                    return 0.74, 2000
+                    return 0.92, 2000
                 return 0.32, timestamp
 
             @staticmethod

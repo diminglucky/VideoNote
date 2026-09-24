@@ -46,6 +46,8 @@ echo 开始 PyInstaller 打包...
   --hidden-import uvicorn ^
   --hidden-import fastapi ^
   --hidden-import starlette ^
+  --collect-all numpy ^
+  --collect-all chromadb ^
   --add-data "app\db\builtin_providers.json;." ^
   --add-data ".env;." ^
   backend\main.py

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { addProvider, addModel, testConnection, getProviderList, updateProviderById } from '@/services/model'
 import { getTranscriberConfig, updateTranscriberConfig } from '@/services/transcriber'
 import { getApiBase } from '@/utils/backendBase'
+import { ONBOARDING_STORAGE_KEY } from '@/constants/onboarding'
 import logo from '@/assets/icon.svg'
 
 // 后端 R.error / ProviderError 的形状是 { code, msg, data }，没有 .message。
@@ -32,21 +33,19 @@ async function pingBackend(): Promise<boolean> {
   }
 }
 
-// 桌面端首启 4 步引导。完成后写 localStorage('bilinote-onboarded') = '1'，路由守卫不再拦。
+// 桌面端首启 4 步引导。完成后写统一 onboarding 标记，路由守卫不再拦。
 //
 // 1. 后端连通性自检
 // 2. LLM 供应商 + 模型（最简：只引导填一个 OpenAI-兼容供应商 + 一个 model 名）
 // 3. 转写引擎选择（推荐 Groq 在线，避开本地模型下载坑）
 // 4. （可选）Cookie 同步说明（仅当用户关注 B 站等需要登录态的平台时）
 
-const ONBOARD_KEY = 'videonote-onboarded'
-
 export function isOnboarded(): boolean {
-  return localStorage.getItem(ONBOARD_KEY) === '1'
+  return localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1'
 }
 
 function markOnboarded() {
-  localStorage.setItem(ONBOARD_KEY, '1')
+  localStorage.setItem(ONBOARDING_STORAGE_KEY, '1')
 }
 
 const Onboarding = () => {
