@@ -76,6 +76,9 @@ export function ModelSelector({
     }
     try {
       setSubmitting(true)
+      if (onBeforeLoad) {
+        await onBeforeLoad()
+      }
       await addNewModel(providerId, selectedModel)
       await onModelSaved?.()
       toast.success('保存模型成功')
@@ -182,7 +185,7 @@ export function ModelSelector({
           disabled={disabled || submitting || !selectedModel}
           className="h-9 rounded-md bg-neutral-950 text-white hover:bg-neutral-800"
         >
-          {submitting ? '保存中...' : '保存模型'}
+          {submitting ? '保存中...' : '保存'}
         </Button>
       </div>
     </div>

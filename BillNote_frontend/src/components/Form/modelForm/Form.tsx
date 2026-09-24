@@ -294,15 +294,16 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
                   />
                 </div>
 
-                <div className="mt-auto flex justify-end border-t border-neutral-100 pt-4">
-                  <Button
-                    type="submit"
-                    disabled={isEditMode && !providerForm.formState.isDirty}
-                    className="h-9 rounded-md bg-neutral-950 px-4 text-white hover:bg-neutral-800"
-                  >
-                    {isEditMode ? '保存修改' : '保存创建'}
-                  </Button>
-                </div>
+                {!isEditMode && (
+                  <div className="mt-auto flex justify-end border-t border-neutral-100 pt-4">
+                    <Button
+                      type="submit"
+                      className="h-9 rounded-md bg-neutral-950 px-4 text-white hover:bg-neutral-800"
+                    >
+                      保存创建
+                    </Button>
+                  </div>
+                )}
               </div>
             </Panel>
           </form>
