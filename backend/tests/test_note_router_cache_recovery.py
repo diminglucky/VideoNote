@@ -269,6 +269,45 @@ class TestNoteRouterCacheRecovery(unittest.TestCase):
             self.assertEqual(data["generation_token"], "new-token")
             self.assertNotIn("result", data)
 
+    def test_status_with_stale_generation_token_returns_current_success(self):
+        with ProjectTempDir() as tmp_dir:
+            output_dir = pathlib.Path(tmp_dir)
+            task_id = "task-1"
+            status_path = output_dir / f"{task_id}.status.json"
+            result_path = output_dir / f"{task_id}.json"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "status": TaskStatus.SUCCESS.value,
+                        "message": "笔记已生成",
+                        "generation_token": "current-token",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "markdown": "current note",
+                        "transcript": {},
+                        "audio_meta": {},
+                        "generation_token": "current-token",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(note_router, "NOTE_OUTPUT_DIR", str(output_dir)):
+                response = note_router.get_task_status(task_id, generation_token="stale-token")
+
+            body = json.loads(response.body.decode("utf-8"))
+            data = body["data"]
+            self.assertEqual(data["status"], TaskStatus.SUCCESS.value)
+            self.assertEqual(data["generation_token"], "current-token")
+            self.assertEqual(data["result"]["markdown"], "current note")
+
     def test_recover_existing_result_without_markdown_must_match_generation_token(self):
         with ProjectTempDir() as tmp_dir:
             output_dir = pathlib.Path(tmp_dir)

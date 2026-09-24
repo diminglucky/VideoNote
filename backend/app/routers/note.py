@@ -781,17 +781,22 @@ def get_task_status(task_id: str, generation_token: Optional[str] = None):
             "generation_token": generation_token,
         }, generation_token, TaskStatus.PENDING.value))
 
-    def _success_response(message: str = "", status_value: str = TaskStatus.SUCCESS.value):
+    def _success_response(
+        message: str = "",
+        status_value: str = TaskStatus.SUCCESS.value,
+        expected_token: Optional[str] = None,
+    ):
+        response_token = generation_token if expected_token is None else expected_token
         result_content = _load_json_file_safely(result_path)
         if result_content is None:
             return R.success(_with_agent_run({
                 "status": TaskStatus.PENDING.value,
                 "message": "结果文件正在写入，请稍后刷新",
                 "task_id": task_id,
-                "generation_token": generation_token,
-            }, generation_token, TaskStatus.PENDING.value))
+                "generation_token": response_token,
+            }, response_token, TaskStatus.PENDING.value))
         result_generation_token = result_content.get("generation_token")
-        if generation_token and result_generation_token != generation_token:
+        if response_token and result_generation_token != response_token:
             return _pending_for_generation()
         _normalize_result_payload(result_content)
         return R.success(_with_agent_run({
@@ -799,8 +804,8 @@ def get_task_status(task_id: str, generation_token: Optional[str] = None):
             "result": result_content,
             "message": message,
             "task_id": task_id,
-            "generation_token": result_generation_token or generation_token,
-        }, generation_token or result_generation_token, status_value))
+            "generation_token": result_generation_token or response_token,
+        }, response_token or result_generation_token, status_value))
 
     # 优先读状态文件
     if os.path.exists(status_path):
@@ -817,6 +822,19 @@ def get_task_status(task_id: str, generation_token: Optional[str] = None):
         message = status_content.get("message", "")
         status_generation_token = status_content.get("generation_token")
         if generation_token and status_generation_token and status_generation_token != generation_token:
+            if status in {TaskStatus.SUCCESS.value, TaskStatus.PARTIAL_SUCCESS.value}:
+                return _success_response(
+                    message,
+                    status,
+                    expected_token=status_generation_token,
+                )
+            if status == TaskStatus.FAILED.value:
+                return R.success(_with_agent_run({
+                    "status": TaskStatus.FAILED.value,
+                    "message": message or "任务失败",
+                    "task_id": task_id,
+                    "generation_token": status_generation_token,
+                }, status_generation_token, TaskStatus.FAILED.value))
             return _pending_for_generation()
 
         if status in {TaskStatus.SUCCESS.value, TaskStatus.PARTIAL_SUCCESS.value}:
