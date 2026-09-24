@@ -284,8 +284,10 @@ const NoteForm = () => {
   }, [form, modelList])
 
   useEffect(() => {
-    if (!currentTask) return
-    const { formData } = currentTask
+    if (!currentTaskId) return
+    const task = getCurrentTask()
+    if (!task) return
+    const { formData } = task
 
     form.reset({
       platform: formData.platform || 'bilibili',
@@ -305,10 +307,9 @@ const NoteForm = () => {
       format: formData.format ?? [],
     })
   }, [
-    currentTask,
     currentTaskId,
     form,
-    modelList,
+    getCurrentTask,
   ])
 
   /* ---- 帮助函数 ---- */
