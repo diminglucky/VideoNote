@@ -538,6 +538,52 @@ def test_content_agent_can_query_allowlisted_tool_before_writing(tmp_path):
     assert len(client.calls) == 2
 
 
+def test_supervisor_delegate_content_with_tool_calls_requested_handler(tmp_path):
+    """A Supervisor-written ``write_note`` decision must not become free-form chat."""
+    seen = []
+    registry = ToolRegistry()
+    registry.register(
+        "write_note",
+        "write the note",
+        {"type": "object"},
+        lambda args, state: (
+            seen.append((args, state.task_id))
+            or Observation(
+                ok=True,
+                summary="note written",
+                data={"artifact": "markdown", "length": 7},
+            )
+        ),
+    )
+    state = AgentState(
+        task_id="task-delegate-tool",
+        user_goal="生成笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+    )
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(
+            action="delegate",
+            agent="content",
+            tool="write_note",
+            arguments={},
+            reason="write",
+            expected="markdown",
+        ),
+        state,
+        registry,
+    )
+
+    assert observation.ok is True
+    assert observation.summary == "note written"
+    assert seen == [({}, "task-delegate-tool")]
+    assert state.tool_calls == 1
+
+
 def test_visual_agent_can_call_allowlisted_visual_tool(tmp_path):
     class VisualToolClient(ScriptedClient):
         def __init__(self):

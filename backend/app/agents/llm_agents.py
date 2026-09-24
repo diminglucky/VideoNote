@@ -81,6 +81,16 @@ ROLE_PROMPTS = {
     ),
 }
 
+CONTENT_QUERY_TOOLS = (
+    "get_video_info",
+    "get_transcript",
+    "get_subtitles",
+    "transcribe_audio",
+)
+CONTENT_DELEGATE_TOOLS = (
+    "write_note",
+) + CONTENT_QUERY_TOOLS
+
 
 def _state_view(state: AgentState) -> dict[str, Any]:
     return {
@@ -540,11 +550,17 @@ class SupervisorAgent:
             return registry.call(action.tool, action.arguments, state)
         if action.action == "delegate":
             if action.agent == "content":
+                if action.tool:
+                    if action.tool not in CONTENT_DELEGATE_TOOLS:
+                        return Observation(
+                            ok=False,
+                            summary=f"Tool {action.tool} is not available to the content delegate",
+                            error_type="unknown_tool",
+                        )
+                    return registry.call(action.tool, action.arguments, state)
                 return self.content.run(
                     state,
-                    registry.scoped(
-                        ("get_video_info", "get_transcript", "get_subtitles", "transcribe_audio")
-                    ),
+                    registry.scoped(CONTENT_QUERY_TOOLS),
                 )
             if action.agent == "visual":
                 allowed_tools = ("get_video_info",)
@@ -568,9 +584,7 @@ class SupervisorAgent:
                 state.content_revisions += 1
                 return self.content.run(
                     state,
-                    registry.scoped(
-                        ("get_video_info", "get_transcript", "get_subtitles", "transcribe_audio")
-                    ),
+                    registry.scoped(CONTENT_QUERY_TOOLS),
                     revision=True,
                 )
             if action.agent is None and "visual" in issue_categories:
