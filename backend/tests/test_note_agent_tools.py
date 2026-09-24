@@ -70,6 +70,7 @@ def test_tool_registry_exposes_only_generation_allowlist(tmp_path):
 
     assert set(registry.names()) == {
         "prepare_media",
+        "get_transcript",
         "get_video_info",
         "get_subtitles",
         "transcribe_audio",
@@ -102,6 +103,53 @@ def test_write_note_returns_artifact_reference_and_updates_state(tmp_path):
     assert state.markdown == "# note"
     assert observation.data["artifact"] == "markdown"
     assert observation.data["length"] == 6
+
+
+def test_get_transcript_prepares_media_and_reuses_subtitles(tmp_path):
+    context = _context()
+    calls = []
+
+    transcript = SimpleNamespace(
+        full_text="prepared transcript",
+        segments=[SimpleNamespace(start=0, end=1, text="prepared transcript")],
+        language="en",
+    )
+
+    class TranscriptAgent:
+        @staticmethod
+        def load_cached_or_platform_subtitles(**_kwargs):
+            calls.append("subtitles")
+            return transcript
+
+    class Executor(_Executor):
+        def __init__(self):
+            super().__init__()
+            self.transcript_agent = TranscriptAgent()
+
+        def _download(self, current):
+            calls.append("download")
+            current.audio_meta = SimpleNamespace(
+                title="Video",
+                duration=10,
+                video_id="v1",
+                raw_info={},
+            )
+
+    runtime = SimpleNamespace(executor=Executor())
+    state = AgentState(task_id="task-1", runtime_context=context)
+    registry = build_note_agent_registry(
+        runtime,
+        _request(),
+        state,
+        JsonlTraceStore(tmp_path / "trace.jsonl"),
+    )
+
+    observation = registry.call("get_transcript", {}, state)
+
+    assert observation.ok is True
+    assert calls == ["download", "subtitles"]
+    assert context.transcript is transcript
+    assert state.transcript_summary == "prepared transcript"
 
 
 def test_tool_exception_is_observation_and_does_not_escape(tmp_path):

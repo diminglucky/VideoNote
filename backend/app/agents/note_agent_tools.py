@@ -10,6 +10,16 @@ from app.agents.agent_trace import JsonlTraceStore
 from app.agents.llm_protocol import AgentState, Observation, ToolRegistry
 from app.agents.note_agents import MarkdownComposeRequest, NoteWriteRequest, TranscriptRequest
 
+NOTE_AGENT_TOOL_NAMES = (
+    "prepare_media",
+    "get_transcript",
+    "get_video_info",
+    "get_subtitles",
+    "transcribe_audio",
+    "write_note",
+    "enhance_visuals",
+)
+
 
 def _transcript_data(transcript: Any) -> dict[str, Any]:
     segments = getattr(transcript, "segments", []) or []
@@ -57,6 +67,12 @@ def build_note_agent_registry(
         "Read already prepared video metadata.",
         {"type": "object", "properties": {}},
         lambda _args, current: _video_info(context, current),
+    )
+    registry.register(
+        "get_transcript",
+        "Prepare media if needed, reuse subtitles when available, and transcribe audio as a fallback.",
+        {"type": "object", "properties": {}},
+        lambda _args, current: _get_transcript(executor, context, request, current),
     )
     registry.register(
         "get_subtitles",
@@ -109,6 +125,39 @@ def _video_info(context: Any, state: AgentState) -> Observation:
         "video_available": bool(context.video_path),
     }
     return Observation(ok=True, summary="video metadata ready", data=state.media_summary)
+
+
+def _get_transcript(executor: Any, context: Any, request: Any, state: AgentState) -> Observation:
+    if context.transcript is None:
+        prepared = _prepare_media(executor, context, request, state)
+        if not prepared.ok:
+            return prepared
+
+    if context.transcript is None:
+        subtitles = _get_subtitles(executor, context, state)
+        if not subtitles.ok:
+            transcribed = _transcribe(executor, context, state)
+            if not transcribed.ok:
+                return transcribed
+
+    if context.transcript is None:
+        return Observation(
+            ok=False,
+            summary="transcript is unavailable",
+            error_type="empty_artifact",
+        )
+
+    payload = _transcript_data(context.transcript)
+    state.transcript_summary = payload["full_text"]
+    return Observation(
+        ok=True,
+        summary="transcript ready",
+        data={
+            "artifact": "transcript",
+            "transcript": payload["full_text"],
+            "segments": payload["segments"],
+        },
+    )
 
 
 def _get_subtitles(executor: Any, context: Any, state: AgentState) -> Observation:

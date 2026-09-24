@@ -23,7 +23,7 @@ from app.agents.llm_protocol import (
     ToolRegistry,
     VisualResult,
 )
-from app.agents.note_agent_tools import build_note_agent_registry
+from app.agents.note_agent_tools import NOTE_AGENT_TOOL_NAMES, build_note_agent_registry
 from app.gpt.provider.OpenAI_compatible_provider import require_chat_completion
 from app.models.notes_model import NoteResult
 
@@ -51,7 +51,10 @@ ACTION_TOOL = {
                     "enum": ["call_tool", "delegate", "review", "revise", "degrade", "finish"],
                 },
                 "agent": {"type": "string", "enum": ["content", "visual", "reviewer", "supervisor"]},
-                "tool": {"type": "string"},
+                "tool": {
+                    "type": "string",
+                    "enum": list(NOTE_AGENT_TOOL_NAMES),
+                },
                 "arguments": {"type": "object"},
                 "reason": {"type": "string"},
                 "expected": {"type": "string"},
@@ -427,6 +430,14 @@ class SupervisorAgent:
                         "supervisor",
                         [
                             {"role": "system", "content": "你是 SupervisorAgent。根据状态选择下一步，必须调用 submit_action。"},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "可用工具："
+                                    + ", ".join(NOTE_AGENT_TOOL_NAMES)
+                                    + "。媒体和转写未准备时，优先调用 get_transcript。"
+                                ),
+                            },
                             {"role": "user", "content": json.dumps(_state_view(state), ensure_ascii=False)},
                         ],
                         tools=[ACTION_TOOL],
@@ -529,7 +540,12 @@ class SupervisorAgent:
             return registry.call(action.tool, action.arguments, state)
         if action.action == "delegate":
             if action.agent == "content":
-                return self.content.run(state, registry.scoped(("get_video_info", "get_subtitles", "transcribe_audio")))
+                return self.content.run(
+                    state,
+                    registry.scoped(
+                        ("get_video_info", "get_transcript", "get_subtitles", "transcribe_audio")
+                    ),
+                )
             if action.agent == "visual":
                 allowed_tools = ("get_video_info",)
                 if not getattr(state.runtime_context, "defer_screenshots", False):
@@ -552,7 +568,9 @@ class SupervisorAgent:
                 state.content_revisions += 1
                 return self.content.run(
                     state,
-                    registry.scoped(("get_video_info", "get_subtitles", "transcribe_audio")),
+                    registry.scoped(
+                        ("get_video_info", "get_transcript", "get_subtitles", "transcribe_audio")
+                    ),
                     revision=True,
                 )
             if action.agent is None and "visual" in issue_categories:

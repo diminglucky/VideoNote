@@ -31,6 +31,7 @@ _ACTIVE_STATUSES = {
 _SAFE_AGENTS = {"supervisor", "content", "visual", "reviewer"}
 _SAFE_TOOLS = {
     "get_video_info",
+    "get_transcript",
     "get_subtitles",
     "transcribe_audio",
     "write_note",
