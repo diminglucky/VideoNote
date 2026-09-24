@@ -43,7 +43,6 @@ class ScriptedClient:
             {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
             {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
             {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
-            {"markdown": "# Agent note", "summary": "draft"},
             {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
             {"passed": True, "issues": []},
             {"action": "finish", "arguments": {}, "reason": "accepted", "expected": "result"},
@@ -102,7 +101,7 @@ def _runtime_context(tmp_path):
 class FakeExecutor:
     def __init__(self, context):
         self.context = context
-        self.note_writer_agent = SimpleNamespace(run=lambda request: "# unused")
+        self.note_writer_agent = SimpleNamespace(run=lambda request: "# Agent note")
         self.transcript_agent = SimpleNamespace(
             load_cached_or_platform_subtitles=self.load_subtitles,
             resolve=self.resolve_transcript,
@@ -175,7 +174,6 @@ def test_enabled_runtime_returns_visual_plan_for_persistence(tmp_path, monkeypat
                 {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
                 {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
                 {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
-                {"markdown": "# Agent note", "summary": "draft"},
                 {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "plan", "expected": "visual"},
                 {"requested": True, "summary": "need result", "plans": [{"title": "结果", "start": 10, "end": 20, "reason": "verify", "evidence_type": "result"}]},
                 {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
@@ -228,7 +226,6 @@ def test_enabled_runtime_persists_empty_visual_plan_when_visual_agent_declines(t
                 {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
                 {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
                 {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
-                {"markdown": "# Agent note", "summary": "draft"},
                 {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "decide", "expected": "visual"},
                 {"requested": False, "summary": "无需视觉证据", "plans": []},
                 {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
@@ -260,7 +257,6 @@ def test_enabled_runtime_removes_visual_markers_when_visual_agent_declines(tmp_p
                 {"action": "call_tool", "tool": "prepare_media", "arguments": {}, "reason": "media", "expected": "media"},
                 {"action": "call_tool", "tool": "get_subtitles", "arguments": {}, "reason": "source", "expected": "transcript"},
                 {"action": "delegate", "agent": "content", "arguments": {}, "reason": "write", "expected": "markdown"},
-                {"markdown": "# Agent note\n\n*Screenshot-[00:10]", "summary": "draft"},
                 {"action": "delegate", "agent": "visual", "arguments": {}, "reason": "decide", "expected": "visual"},
                 {"requested": False, "summary": "无需视觉证据", "plans": []},
                 {"action": "review", "arguments": {}, "reason": "quality", "expected": "review"},
@@ -272,6 +268,9 @@ def test_enabled_runtime_removes_visual_markers_when_visual_agent_declines(tmp_p
     gpt = FakeGPT(client)
     context.gpt = gpt
     runtime = SimpleNamespace(executor=FakeExecutor(context), gpt=gpt)
+    runtime.executor.note_writer_agent.run = (
+        lambda request: "# Agent note\n\n*Screenshot-[00:10]"
+    )
 
     result = LlmNoteOrchestrator(
         trace_store=JsonlTraceStore(tmp_path / "task-1.agent-trace.jsonl")

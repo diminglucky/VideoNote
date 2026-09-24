@@ -558,6 +558,13 @@ class SupervisorAgent:
                             error_type="unknown_tool",
                         )
                     return registry.call(action.tool, action.arguments, state)
+                if "write_note" in registry.names():
+                    has_transcript = bool(state.transcript_summary.strip()) or (
+                        getattr(state.runtime_context, "transcript", None) is not None
+                    )
+                    if not has_transcript:
+                        return registry.call("get_transcript", action.arguments, state)
+                    return registry.call("write_note", action.arguments, state)
                 return self.content.run(
                     state,
                     registry.scoped(CONTENT_QUERY_TOOLS),

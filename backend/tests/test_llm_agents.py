@@ -584,6 +584,95 @@ def test_supervisor_delegate_content_with_tool_calls_requested_handler(tmp_path)
     assert state.tool_calls == 1
 
 
+def test_supervisor_delegate_content_without_tool_writes_ready_note(tmp_path):
+    seen = []
+    registry = ToolRegistry()
+    registry.register(
+        "write_note",
+        "write the note",
+        {"type": "object"},
+        lambda args, state: (
+            seen.append((args, state.task_id))
+            or Observation(
+                ok=True,
+                summary="note written",
+                data={"artifact": "markdown", "length": 7},
+            )
+        ),
+    )
+    state = AgentState(
+        task_id="task-delegate-ready",
+        user_goal="生成笔记",
+        media_summary={"title": "video"},
+        transcript_summary="transcript",
+    )
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(
+            action="delegate",
+            agent="content",
+            arguments={},
+            reason="write",
+            expected="markdown",
+        ),
+        state,
+        registry,
+    )
+
+    assert observation.ok is True
+    assert observation.summary == "note written"
+    assert seen == [({}, "task-delegate-ready")]
+    assert state.tool_calls == 1
+
+
+def test_supervisor_delegate_content_without_tool_prepares_transcript_first(tmp_path):
+    seen = []
+    registry = ToolRegistry()
+    registry.register(
+        "get_transcript",
+        "get transcript",
+        {"type": "object"},
+        lambda args, state: (
+            seen.append((args, state.task_id))
+            or Observation(
+                ok=True,
+                summary="transcript ready",
+                data={"transcript": "ready"},
+            )
+        ),
+    )
+    registry.register(
+        "write_note",
+        "write the note",
+        {"type": "object"},
+        lambda _args, _state: Observation(ok=True, summary="unexpected write"),
+    )
+    state = AgentState(task_id="task-delegate-transcript", user_goal="生成笔记")
+    supervisor = SupervisorAgent(
+        FakeGPT(ScriptedClient([])), JsonlTraceStore(tmp_path / "trace.jsonl")
+    )
+
+    observation = supervisor._execute(
+        AgentAction(
+            action="delegate",
+            agent="content",
+            arguments={},
+            reason="prepare",
+            expected="transcript",
+        ),
+        state,
+        registry,
+    )
+
+    assert observation.ok is True
+    assert observation.summary == "transcript ready"
+    assert seen == [({}, "task-delegate-transcript")]
+    assert state.tool_calls == 1
+
+
 def test_visual_agent_can_call_allowlisted_visual_tool(tmp_path):
     class VisualToolClient(ScriptedClient):
         def __init__(self):
