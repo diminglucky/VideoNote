@@ -37,7 +37,13 @@ export const useTaskPolling = (interval = 3000, enabled = true) => {
         const { status, message } = res
         const latestTask = tasksRef.current.find(item => item.id === task.id)
         if (!latestTask || latestTask.isRetrySubmitting) return
-        if (latestTask.generationToken && res.generation_token !== latestTask.generationToken) return
+        const tokenChanged =
+          latestTask.generationToken && res.generation_token !== latestTask.generationToken
+        const terminalStatus =
+          isSuccessTaskStatus(status) ||
+          isPartialSuccessTaskStatus(status) ||
+          isFailedTaskStatus(status)
+        if (tokenChanged && !terminalStatus) return
 
         if (!status) return
 
