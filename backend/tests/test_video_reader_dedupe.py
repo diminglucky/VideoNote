@@ -163,10 +163,10 @@ class TestVideoReaderDeduplicateFrames(unittest.TestCase):
                 3: b"frame-b",
             }
 
-            with patch.object(video_reader_module.ffmpeg, "probe", return_value={"format": {"duration": "4"}}), \
-                    patch.object(video_reader_module.subprocess, "run", side_effect=_make_fake_ffmpeg_runner(fake_colors)), \
-                    patch.object(reader, "_score_frame", side_effect=lambda _path: (0.5, None)):
-                paths = reader.extract_frames(max_frames=10)
+        with patch.object(video_reader_module, "_probe_video_duration", return_value=4.0), \
+                patch.object(video_reader_module.subprocess, "run", side_effect=_make_fake_ffmpeg_runner(fake_colors)), \
+                patch.object(reader, "_score_frame", side_effect=lambda _path: (0.5, None)):
+            paths = reader.extract_frames(max_frames=10)
 
             names = [pathlib.Path(p).name for p in paths]
             self.assertEqual(names, ["frame_00_00.jpg", "frame_00_02.jpg"])
@@ -202,10 +202,10 @@ class TestVideoReaderDeduplicateFrames(unittest.TestCase):
             def _score(path):
                 return scores[pathlib.Path(path).name]
 
-            with patch.object(video_reader_module.ffmpeg, "probe", return_value={"format": {"duration": "12"}}), \
-                    patch.object(video_reader_module.subprocess, "run", side_effect=_make_fake_ffmpeg_runner(fake_colors)), \
-                    patch.object(reader, "_score_frame", side_effect=_score):
-                paths = reader.extract_frames(max_frames=10)
+        with patch.object(video_reader_module, "_probe_video_duration", return_value=12.0), \
+                patch.object(video_reader_module.subprocess, "run", side_effect=_make_fake_ffmpeg_runner(fake_colors)), \
+                patch.object(reader, "_score_frame", side_effect=_score):
+            paths = reader.extract_frames(max_frames=10)
 
             names = [pathlib.Path(p).name for p in paths]
             self.assertEqual(names, ["frame_00_02.jpg", "frame_00_08.jpg"])

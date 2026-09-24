@@ -7,7 +7,6 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-import ffmpeg
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 
 from app.utils.logger import get_logger
@@ -19,12 +18,7 @@ _RUN_LOCKS_GUARD = threading.Lock()
 
 
 def _probe_video_duration(video_path: str) -> float | None:
-    """Return video duration, falling back to ffmpeg when ffprobe is unavailable."""
-    try:
-        return float(ffmpeg.probe(video_path)["format"]["duration"])
-    except Exception as exc:
-        logger.warning("ffprobe failed while reading video duration: %s", exc)
-
+    """Return video duration from ffmpeg output without invoking ffprobe."""
     try:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-i", str(video_path)],
@@ -34,7 +28,7 @@ def _probe_video_duration(video_path: str) -> float | None:
             timeout=10,
         )
     except Exception as exc:
-        logger.warning("Unable to read video duration with ffmpeg fallback: %s", exc)
+        logger.warning("Unable to read video duration with ffmpeg: %s", exc)
         return None
 
     output = f"{result.stderr or ''}\n{result.stdout or ''}"

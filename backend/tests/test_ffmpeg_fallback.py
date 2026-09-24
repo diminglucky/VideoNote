@@ -5,10 +5,8 @@ from app.utils.video_quality import probe_video_size
 from app.utils.video_reader import _probe_video_duration
 
 
-def test_probe_video_size_uses_ffmpeg_when_ffprobe_is_unavailable():
+def test_probe_video_size_uses_ffmpeg_only():
     def run(command, **kwargs):
-        if command[0] == "ffprobe":
-            raise FileNotFoundError("ffprobe")
         assert command[0] == "ffmpeg"
         return subprocess.CompletedProcess(
             command,
@@ -21,7 +19,7 @@ def test_probe_video_size_uses_ffmpeg_when_ffprobe_is_unavailable():
         assert probe_video_size("sample.mp4") == (1280, 720)
 
 
-def test_probe_video_duration_uses_ffmpeg_when_ffprobe_probe_fails():
+def test_probe_video_duration_uses_ffmpeg_only():
     def run(command, **kwargs):
         assert command[0] == "ffmpeg"
         return subprocess.CompletedProcess(
@@ -31,8 +29,5 @@ def test_probe_video_duration_uses_ffmpeg_when_ffprobe_probe_fails():
             stderr="Duration: 01:02:03.50, start: 0.000000, bitrate: 1000 kb/s",
         )
 
-    with patch(
-        "app.utils.video_reader.ffmpeg.probe",
-        side_effect=RuntimeError("ffprobe crashed"),
-    ), patch("app.utils.video_reader.subprocess.run", side_effect=run):
+    with patch("app.utils.video_reader.subprocess.run", side_effect=run):
         assert _probe_video_duration("sample.mp4") == 3723.5

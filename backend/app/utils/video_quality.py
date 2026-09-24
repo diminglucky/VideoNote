@@ -31,50 +31,9 @@ def screenshot_video_format_selector() -> str:
 
 
 def probe_video_size(video_path: str | Path) -> Optional[Tuple[int, int]]:
-    ffprobe_error = None
+    """Read stream dimensions from ffmpeg diagnostics without invoking ffprobe."""
     try:
         result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=s=x:p=0",
-                str(video_path),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-        )
-    except Exception as exc:
-        ffprobe_error = exc
-    else:
-        if result.returncode == 0:
-            output = (result.stdout or "").strip()
-            if "x" in output:
-                try:
-                    width, height = output.split("x", 1)
-                    return int(width), int(height)
-                except ValueError:
-                    pass
-        else:
-            ffprobe_error = RuntimeError(
-                (result.stderr or result.stdout or "ffprobe returned a non-zero exit code").strip()
-            )
-
-    if ffprobe_error is not None:
-        logger.warning("ffprobe failed while inspecting video: %s", ffprobe_error)
-
-    # Some lightweight Windows installs provide ffmpeg but not a working
-    # ffprobe.  ffmpeg still prints the stream dimensions while opening the
-    # input, so use that diagnostic output as a safe fallback.
-    try:
-        fallback = subprocess.run(
             ["ffmpeg", "-hide_banner", "-i", str(video_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -82,10 +41,10 @@ def probe_video_size(video_path: str | Path) -> Optional[Tuple[int, int]]:
             timeout=10,
         )
     except Exception as exc:
-        logger.warning("Unable to inspect video with ffmpeg fallback: %s", exc)
+        logger.warning("Unable to inspect video with ffmpeg: %s", exc)
         return None
 
-    stream_text = f"{fallback.stderr or ''}\n{fallback.stdout or ''}"
+    stream_text = f"{result.stderr or ''}\n{result.stdout or ''}"
     match = re.search(r"\b(\d{2,5})x(\d{2,5})(?:[,\s]|$)", stream_text)
     if not match:
         return None
