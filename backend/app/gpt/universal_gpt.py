@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.gpt.prompt import MERGE_PROMPT
+from app.gpt.provider.OpenAI_compatible_provider import require_chat_completion
 from app.gpt.request_chunker import RequestChunker
 from app.models.transcriber_model import TranscriptSegment
 from datetime import timedelta
@@ -274,17 +275,21 @@ class UniversalGPT(GPT):
         """单次调用。如果模型拒绝自定义 temperature，就地去掉该参数再试一次
         （不消耗外层的重试次数预算），仍失败则把异常抛给外层重试逻辑。"""
         try:
-            return self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
+            return require_chat_completion(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                )
             )
         except Exception as exc:
             if self._is_temperature_unsupported_error(exc):
                 print(f"[universal_gpt] 模型 {self.model} 不支持自定义 temperature，改用默认值重试")
-                return self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
+                return require_chat_completion(
+                    self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                    )
                 )
             raise
 

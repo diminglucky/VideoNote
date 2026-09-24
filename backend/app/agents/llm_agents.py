@@ -24,6 +24,7 @@ from app.agents.llm_protocol import (
     VisualResult,
 )
 from app.agents.note_agent_tools import build_note_agent_registry
+from app.gpt.provider.OpenAI_compatible_provider import require_chat_completion
 from app.models.notes_model import NoteResult
 
 logger = logging.getLogger(__name__)
@@ -115,11 +116,13 @@ class LlmAgentClient:
         task_id: str | None = None,
     ) -> Any:
         self.trace_store.append({"kind": "llm_call", "task_id": task_id, "agent": role, "message_count": len(messages)})
-        response = self.gpt.client.chat.completions.create(
-            model=self.gpt.model,
-            messages=messages,
-            tools=tools or [],
-            temperature=0.2,
+        response = require_chat_completion(
+            self.gpt.client.chat.completions.create(
+                model=self.gpt.model,
+                messages=messages,
+                tools=tools or [],
+                temperature=0.2,
+            )
         )
         message = response.choices[0].message
         self.trace_store.append({"kind": "llm_response", "task_id": task_id, "agent": role, "has_tool_call": bool(getattr(message, "tool_calls", None))})

@@ -62,6 +62,7 @@ const formSchema = z
     screenshot: z.boolean().optional(),
     link: z.boolean().optional(),
     model_name: z.string().nonempty('请选择模型'),
+    model_ref: z.string().optional(),
     format: z.array(z.string()).default([]),
     style: z.string().nonempty('请选择笔记生成风格'),
     extras: z.string().optional(),
@@ -228,6 +229,7 @@ const NoteForm = () => {
       platform: 'bilibili',
       quality: 'medium',
       model_name: modelList[0]?.model_name || '',
+      model_ref: modelList[0] ? `${modelList[0].provider_id}::${modelList[0].model_name}` : '',
       style: 'minimal',
       video_interval: 6,
       grid_size: [2, 2],
@@ -241,9 +243,16 @@ const NoteForm = () => {
   const platform = useWatch({ control: form.control, name: 'platform' }) as string
   const videoUnderstandingEnabled = useWatch({ control: form.control, name: 'video_understanding' })
   const selectedModel = useWatch({ control: form.control, name: 'model_name' })
+  const selectedModelRef = useWatch({ control: form.control, name: 'model_ref' })
   const selectedStyle = useWatch({ control: form.control, name: 'style' })
   const selectedQuality = useWatch({ control: form.control, name: 'quality' })
   const selectedFormats = useWatch({ control: form.control, name: 'format' }) || []
+  const selectedModelLabel = useMemo(() => {
+    const selected = modelList.find(
+      item => `${item.provider_id}::${item.model_name}` === selectedModelRef,
+    )
+    return selected ? `${selected.model_name} · ${selected.provider_id}` : (selectedModel || '未选择')
+  }, [modelList, selectedModel, selectedModelRef])
   const editing = currentTask && currentTask.id
   const platformLabel = useMemo(
     () => videoPlatforms.find(item => item.value === platform)?.label || '未选择',
@@ -268,8 +277,9 @@ const NoteForm = () => {
   }, [loadEnabledModels])
 
   useEffect(() => {
-    if (!form.getValues('model_name') && modelList[0]?.model_name) {
+    if (!form.getValues('model_ref') && modelList[0]?.model_name) {
       form.setValue('model_name', modelList[0].model_name)
+      form.setValue('model_ref', `${modelList[0].provider_id}::${modelList[0].model_name}`)
     }
   }, [form, modelList])
 
@@ -281,6 +291,9 @@ const NoteForm = () => {
       platform: formData.platform || 'bilibili',
       video_url: formData.video_url || '',
       model_name: formData.model_name || modelList[0]?.model_name || '',
+      model_ref: formData.provider_id && formData.model_name
+        ? `${formData.provider_id}::${formData.model_name}`
+        : (modelList[0] ? `${modelList[0].provider_id}::${modelList[0].model_name}` : ''),
       style: formData.style || 'minimal',
       quality: formData.quality || 'medium',
       extras: formData.extras || '',
@@ -321,7 +334,9 @@ const NoteForm = () => {
 
   const onSubmit = async (values: NoteFormValues) => {
     if (isSubmitting || isGenerating()) return
-    const selectedModelConfig = modelList.find(m => m.model_name === values.model_name)
+    const selectedModelConfig = modelList.find(
+      m => `${m.provider_id}::${m.model_name}` === values.model_ref,
+    ) || modelList.find(m => m.model_name === values.model_name)
     if (!selectedModelConfig) {
       toast.error('请先选择可用模型')
       return
@@ -454,7 +469,7 @@ const NoteForm = () => {
 
               <div className="mb-2.5 flex flex-wrap gap-1.5">
                 <SummaryChip label="来源" value={platformLabel} />
-                <SummaryChip label="模型" value={selectedModel || '未选择'} />
+                <SummaryChip label="模型" value={selectedModelLabel} />
                 <SummaryChip label="风格" value={styleLabel} />
                 <SummaryChip label="输出" value={`${qualityLabel} / ${outputLabel}`} />
               </div>
@@ -595,7 +610,7 @@ const NoteForm = () => {
                   {modelList.length > 0 ? (
                     <FormField
                       control={form.control}
-                      name="model_name"
+                      name="model_ref"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>模型</FormLabel>
@@ -604,7 +619,13 @@ const NoteForm = () => {
                               loadEnabledModels()
                             }}
                             value={field.value}
-                            onValueChange={field.onChange}
+                            onValueChange={nextRef => {
+                              const selected = modelList.find(
+                                item => `${item.provider_id}::${item.model_name}` === nextRef,
+                              )
+                              field.onChange(nextRef)
+                              if (selected) form.setValue('model_name', selected.model_name)
+                            }}
                             defaultValue={field.value}
                           >
                             <FormControl>
@@ -614,8 +635,11 @@ const NoteForm = () => {
                             </FormControl>
                             <SelectContent>
                               {modelList.map(m => (
-                                <SelectItem key={m.id} value={m.model_name}>
-                                  {m.model_name}
+                                <SelectItem
+                                  key={`${m.provider_id}::${m.model_name}::${m.id}`}
+                                  value={`${m.provider_id}::${m.model_name}`}
+                                >
+                                  {m.model_name} · {m.provider_id}
                                 </SelectItem>
                               ))}
                             </SelectContent>
