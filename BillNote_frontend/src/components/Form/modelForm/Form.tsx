@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CheckCircle2, KeyRound, Loader2, Server, Trash2, TriangleAlert } from 'lucide-react'
+import { KeyRound, Server, Trash2, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
@@ -19,7 +19,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { deleteModelById, testConnection } from '@/services/model.ts'
+import { deleteModelById } from '@/services/model.ts'
 import { useModelStore } from '@/store/modelStore'
 import { useProviderStore } from '@/store/providerStore'
 
@@ -80,7 +80,6 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
   const loadModelsById = useModelStore(state => state.loadModelsById)
 
   const [loading, setLoading] = useState(true)
-  const [testing, setTesting] = useState(false)
   const [isBuiltIn, setIsBuiltIn] = useState(false)
   const [enabledModels, setEnabledModels] = useState<EnabledModel[]>([])
 
@@ -158,31 +157,6 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
       toast.success('删除成功')
     } catch (error) {
       toast.error('删除异常')
-    }
-  }
-
-  const handleTest = async () => {
-    const values = providerForm.getValues()
-    if (!savedProviderId) {
-      toast.error('请先保存供应商信息')
-      return
-    }
-    if (!values.apiKey || !values.baseUrl) {
-      toast.error('请填写 API Key 和 API 地址')
-      return
-    }
-
-    try {
-      setTesting(true)
-      if (providerForm.formState.isDirty) {
-        await persistProviderDraft()
-      }
-      await testConnection({ id: savedProviderId }, { silent: true })
-      toast.success('测试连通性成功')
-    } catch (error: any) {
-      toast.error(error?.data?.msg || error?.message || '连接失败')
-    } finally {
-      setTesting(false)
     }
   }
 
@@ -291,29 +265,13 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
                     render={({ field }) => (
                       <FormItem>
                         <FieldRow label="API 地址">
-                          <div className="flex gap-2">
-                            <FormControl>
-                              <Input
-                                {...field}
-                                className="h-9 min-w-0 flex-1"
-                                placeholder="https://api.openai.com/v1"
-                              />
-                            </FormControl>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-9 shrink-0"
-                              onClick={handleTest}
-                              disabled={testing || !savedProviderId}
-                            >
-                              {testing ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="h-4 w-4" />
-                              )}
-                              测试
-                            </Button>
-                          </div>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              className="h-9"
+                              placeholder="https://api.openai.com/v1"
+                            />
+                          </FormControl>
                           <FormMessage className="mt-1" />
                         </FieldRow>
                       </FormItem>

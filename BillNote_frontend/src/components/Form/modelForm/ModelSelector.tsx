@@ -9,7 +9,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { testConnection } from '@/services/model.ts'
 
 interface ModelSelectorProps {
   providerId: string
@@ -30,6 +32,7 @@ export function ModelSelector({
     useModelStore()
   const [search, setSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [testing, setTesting] = useState(false)
 
   const filteredModels = models.filter(model => {
     const keywords = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -83,6 +86,32 @@ export function ModelSelector({
     }
   }
 
+  const handleTest = async () => {
+    if (disabled) {
+      toast.error(disabledMessage || '请先完成供应商配置')
+      return
+    }
+    if (!selectedModel) {
+      toast.error('请先选择一个模型')
+      return
+    }
+    try {
+      setTesting(true)
+      if (onBeforeLoad) {
+        await onBeforeLoad()
+      }
+      await testConnection(
+        { id: providerId, model: selectedModel },
+        { silent: true },
+      )
+      toast.success('模型连通性测试成功')
+    } catch (error: any) {
+      toast.error(error?.data?.msg || error?.msg || error?.message || '模型连通性测试失败')
+    } finally {
+      setTesting(false)
+    }
+  }
+
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-3">
@@ -132,14 +161,30 @@ export function ModelSelector({
         </div>
       )}
 
-      <Button
-        type="button"
-        onClick={handleSubmit}
-        disabled={disabled || submitting || !selectedModel}
-        className="h-9 rounded-md bg-neutral-950 text-white hover:bg-neutral-800"
-      >
-        {submitting ? '保存中...' : '保存模型'}
-      </Button>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleTest}
+          disabled={disabled || testing || !selectedModel}
+          className="h-9"
+        >
+          {testing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4" />
+          )}
+          测试
+        </Button>
+        <Button
+          type="button"
+          onClick={handleSubmit}
+          disabled={disabled || submitting || !selectedModel}
+          className="h-9 rounded-md bg-neutral-950 text-white hover:bg-neutral-800"
+        >
+          {submitting ? '保存中...' : '保存模型'}
+        </Button>
+      </div>
     </div>
   )
 }
